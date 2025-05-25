@@ -1,0 +1,6 @@
+taxi_id,datetime_str,longitude,latitude,time_diff,distance,speed_mps,speed_kmph,is_outlier_time,is_outlier_speed,is_outlier_distance,is_outlier,is_speeding
+3213,2008-02-03 11:53:58,116.37324,39.89709,,,,,False,False,False,False,False
+3213,2008-02-03 11:54:58,116.37334,39.89455,1.0,282.1525285080742,4.702542141801237,16.929151710484454,False,False,False,False,False
+3213,2008-02-06 14:56:57,116.32988,39.968,4501.983333333334,8961.653407178463,0.03317668659804924,0.11943607175297727,True,True,False,True,False
+3213,2008-02-06 14:57:57,116.32988,39.968,1.0,0.0,0.0,0.0,False,False,False,False,False
+3213,2008-02-06 14:58:57,116.32988,39.968,1.0,0.0,0.0,0.0,False,False,False,False,False

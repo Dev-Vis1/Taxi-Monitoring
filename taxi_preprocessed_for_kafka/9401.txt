@@ -1,0 +1,3 @@
+taxi_id,datetime_str,longitude,latitude,time_diff,distance,speed_mps,speed_kmph,is_outlier_time,is_outlier_speed,is_outlier_distance,is_outlier,is_speeding
+9401,2008-02-04 15:45:36,116.72805,39.92017,,,,,False,False,False,False,False
+9401,2008-02-04 15:50:37,116.7462,39.92009,5.016666666666667,1551.7281870568381,5.155243146368233,18.558875326925637,False,False,False,False,False
