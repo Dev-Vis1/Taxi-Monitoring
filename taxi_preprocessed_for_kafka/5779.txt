@@ -1,3 +1,0 @@
-taxi_id,datetime_str,longitude,latitude,time_diff,distance,speed_mps,speed_kmph,is_outlier_time,is_outlier_speed,is_outlier_distance,is_outlier,is_speeding
-5779,2008-02-06 00:23:39,116.34578,39.88185,,,,,False,False,False,False,False
-5779,2008-02-07 22:53:33,116.32409,40.03455,2789.9,17055.857292548037,0.10189049364103872,0.36680577710773943,True,True,False,True,False
