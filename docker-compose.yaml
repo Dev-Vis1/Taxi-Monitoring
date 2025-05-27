@@ -44,8 +44,71 @@ services:
     networks:
       - taxi_network
 
+  python-producer:
+    build:
+      context: ./taxi_locations/producer
+      dockerfile: Dockerfile
+    volumes:
+      - ./taxi_locations:/app
+    depends_on:
+      - zookeeper
+      - kafka
+    environment:
+      KAFKA_BROKER: kafka:29092
+    restart: unless-stopped
+    networks:
+      - taxi_network
 
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - taxi_network
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - taxi_network
+
+  
+  flink-jobmanager:
+    image: flink:1.18.1-scala_2.12-java17
+    container_name: flink-jobmanager
+    ports:
+      - "8081:8081"
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager        
+
+    command: jobmanager
+    restart: unless-stopped
+    networks:
+      - taxi_network
+
+  
+  flink-taskmanager:
+    image: flink:1.18.1-scala_2.12-java17
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 5  
+    restart: unless-stopped
+    networks:
+      - taxi_network
 
 
 networks:
