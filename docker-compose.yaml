@@ -1,6 +1,3 @@
-// filepath: ..\docker-compose.yaml
-version: "1.0"
-
 services:
   
   zookeeper:
