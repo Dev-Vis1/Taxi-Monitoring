@@ -1,4 +1,4 @@
-package Dto;
+package com.a6.taxi.dto;
 
 public class TaxiDistance {
     private String taxi_id;
