@@ -1,2 +1,4 @@
 # Java / Maven
 target/
+.DS_Store
+.vscode/settings.json
