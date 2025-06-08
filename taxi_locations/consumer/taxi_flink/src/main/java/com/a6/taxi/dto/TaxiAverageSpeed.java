@@ -8,6 +8,6 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @NoArgsConstructor
 public class TaxiAverageSpeed {
-    private String taxi_id;
+    private String taxiId;
     private double averageSpeed;
 }
