@@ -1,18 +1,19 @@
-package Dto;
+package com.a6.taxi.dto;
 
 public class TaxiDistance {
-    private String taxi_id;
+    private String taxiId;
     private double distance;
 
-    public TaxiDistance() {}
+    public TaxiDistance() {
+    }
 
-    public TaxiDistance(String taxi_id, double distance) {
-        this.taxi_id = taxi_id;
+    public TaxiDistance(String taxiId, double distance) {
+        this.taxiId = taxiId;
         this.distance = distance;
     }
 
-    public String getTaxi_id() {
-        return taxi_id;
+    public String getTaxiId() {
+        return taxiId;
     }
 
     public double getDistance() {
