@@ -65,16 +65,19 @@ services:
     networks:
       - taxi_network
 
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
+  dash-app:
+    build:
+      context: ./dash-app
+      dockerfile: Dockerfile
+    container_name: dash-app
     ports:
-      - "3000:3000"
+      - "8050:8050"
     depends_on:
       - redis
-    restart: unless-stopped
     networks:
       - taxi_network
+    volumes:
+      - ./dash-app:/app
 
   
   flink-jobmanager:

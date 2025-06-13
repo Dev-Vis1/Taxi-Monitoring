@@ -1,0 +1,4 @@
+dash-bootstrap-components
+geopy
+pandas
+redis
