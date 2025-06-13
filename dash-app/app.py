@@ -10,6 +10,12 @@ server = app.server
 
 # Initial taxi IDs (could be dynamic later)
 taxi_ids = get_all_taxi_ids()
+print("Available Taxi IDs:", taxi_ids)
+
+loc = get_latest_location
+print("Latest location function loaded.",loc)
+route = get_route
+print("Route function loaded.",route)
 
 app.layout = html.Div([
     html.H1("Real-Time Taxi Tracker", style={"textAlign": "center"}),
@@ -36,32 +42,30 @@ app.layout = html.Div([
 )
 def update_map(taxi_id, _):
     if not taxi_id:
-        # Default empty map
-        return px.scatter_mapbox(zoom=10).update_layout(mapbox_style="open-street-map")
+        print("No Taxi ID selected.")  # Debugging log
+        return px.scatter_geo().update_layout(geo=dict(projection_type="natural earth"))
 
     latest = get_latest_location(taxi_id)
     route = get_route(taxi_id)
 
     if not latest:
-        # Log missing data for debugging
-        print(f"No latest location found for Taxi ID: {taxi_id}")
-        return px.scatter_mapbox(zoom=10).update_layout(mapbox_style="open-street-map")
+        print(f"No latest location found for Taxi ID: {taxi_id}")  # Debugging log
+        return px.scatter_geo().update_layout(geo=dict(projection_type="natural earth"))
 
-    # Create map with latest location
-    fig = px.scatter_mapbox(
+    print(f"Latest location for Taxi ID {taxi_id}: {latest}")  # Debugging log
+    fig = px.scatter_geo(
         lat=[latest["latitude"]],
         lon=[latest["longitude"]],
         hover_name=[f"Taxi: {taxi_id}"],
-        zoom=12,
-        height=600
+        projection="natural earth"
     )
-    fig.update_layout(mapbox_style="open-street-map")
+    fig.update_layout(geo=dict(projection_type="natural earth"))
 
-    # Add route if available
     if route:
+        print(f"Route for Taxi ID {taxi_id}: {route}")  # Debugging log
         route_lat = [p["latitude"] for p in route]
         route_lon = [p["longitude"] for p in route]
-        fig.add_scattermapbox(
+        fig.add_scattergeo(
             lat=route_lat,
             lon=route_lon,
             mode="lines",
@@ -70,6 +74,9 @@ def update_map(taxi_id, _):
         )
 
     return fig
+
+latest_location = get_latest_location("85")
+print(f"Latest location for Taxi ID 85: {latest_location}")
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=8050)

@@ -78,7 +78,10 @@ services:
       - taxi_network
     volumes:
       - ./dash-app:/app
-
+    deploy:
+      resources:
+        limits:
+          memory: 512M
   
   flink-jobmanager:
     image: flink:1.18.1-scala_2.12-java17
