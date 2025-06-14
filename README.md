@@ -3,8 +3,8 @@
 
 ## Description
 A plug-and-play, containerized data pipeline for real-time taxi data streaming, analytics, and dashboarding.  
-This project leverages Kafka, Flink, Redis, and a Dash web app, all orchestrated with Docker Compose.  
-It enables ingestion, processing, storage, and visualization of taxi location data in real time.
+
+This project leverages Kafka, Flink, Redis, and a Dash web app, all orchestrated with Docker Compose. It enables ingestion, processing, storage, and visualization of taxi location data in real time.
 
 **Features:**
 - Real-time data ingestion with a Python Kafka producer
