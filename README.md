@@ -1,4 +1,3 @@
-# BD25_Project_A6_B
 # Taxi Data Streaming Platform
 
 ## Description
@@ -68,8 +67,8 @@ Open an issue in the repository
 Email any of the contributors
 
 ## Roadmap
-- [] Add more analytics to the dashboard
-- [] Integrate authentication for dashboard access
+- Add more analytics to the dashboard
+- Integrate authentication for dashboard access
 
 ## Contributing
 Contributions are welcome!
