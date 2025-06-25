@@ -13,7 +13,7 @@ This project leverages Kafka, Flink, Redis, and a Dash web app, all orchestrated
 - Easy local development and deployment using Docker Compose
 
 ## Visuals
-![Dashboard Screenshot](docs/dummy_screenshot.png)
+![Dashboard Screenshot](docs/dashboard.png)
 *Example: Real-time taxi activity dashboard.*
 
 ## Installation
