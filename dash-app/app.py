@@ -61,7 +61,7 @@ def is_blacklisted_incident(incident):
     if incident['type'] in BLACKLISTED_INCIDENT_TYPES:
         return True
     # Blacklist speed violations above 200 km/h
-    if incident['type'] == 'Speed Violation' and incident['speed'] > 200:
+    if incident['type'] == 'Speed Violation' and incident['speed'] >= 200:
         return True
     return False
 
@@ -414,8 +414,8 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
         ))
         
         # Highlight selected taxi if one is selected
-        if selected_taxi_id and selected_taxi_id in taxi_data:
-            selected_taxi = taxi_data[selected_taxi_id]
+        if selected_taxi_id and selected_taxi_id in taxi_data_snapshot:
+            selected_taxi = taxi_data_snapshot[selected_taxi_id]
             map_fig.add_trace(go.Scattermap(
                 lat=[selected_taxi['lat']],
                 lon=[selected_taxi['lng']],
