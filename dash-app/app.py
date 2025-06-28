@@ -381,10 +381,12 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
         ))
     
     # Add taxi markers if we have data
-    if taxi_data:
-        taxi_df = pd.DataFrame.from_dict(taxi_data, orient='index').reset_index()
+    taxi_data_snapshot = dict(taxi_data) if taxi_data else {}
+
+    if taxi_data_snapshot:
+        taxi_df = pd.DataFrame.from_dict(taxi_data_snapshot, orient='index').reset_index()
         taxi_df.columns = ['taxi_id', 'lat', 'lng', 'speed', 'timestamp']
-        
+   
         # Color markers by speed
         taxi_df['color'] = taxi_df['speed'].apply(
             lambda s: '#ff0000' if s > 60 else 
@@ -458,19 +460,20 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     )
     
     # Calculate statistics
-    active_taxis = len(taxi_data)
+    active_taxis = len(taxi_data_snapshot)
     violations = len(incident_log)
     
     # Calculate average speed
     avg_speed = 0
-    if taxi_data:
-        speeds = [data['speed'] for data in taxi_data.values()]
+    if taxi_data_snapshot:
+        speeds = [data['speed'] for data in taxi_data_snapshot.values()]
         avg_speed = sum(speeds) / len(speeds) if speeds else 0
+
     
     # Speed distribution chart
     speed_bins = [0] * 5
-    if taxi_data:
-        speeds = [data['speed'] for data in taxi_data.values()]
+    if taxi_data_snapshot:
+        speeds = [data['speed'] for data in taxi_data_snapshot.values()]
         speed_bins[0] = len([s for s in speeds if s < 20])
         speed_bins[1] = len([s for s in speeds if 20 <= s < 40])
         speed_bins[2] = len([s for s in speeds if 40 <= s < 60])
