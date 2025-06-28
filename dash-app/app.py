@@ -496,8 +496,9 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     
     # Create incident cards
     incident_cards = []
-    if incident_log:
-        for incident in incident_log:
+    incidents_snapshot = list(incident_log)
+    if incidents_snapshot:
+        for incident in incidents_snapshot:
             card = dbc.Card(
                 dbc.CardBody([
                     html.Div([
