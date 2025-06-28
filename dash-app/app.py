@@ -50,6 +50,21 @@ geo_json = {
     ]
 }
 
+
+# Blacklist for taxi IDs or incident types
+BLACKLISTED_TAXIS = set()  
+BLACKLISTED_INCIDENT_TYPES = set() 
+
+def is_blacklisted_incident(incident):
+    if incident['taxi_id'] in BLACKLISTED_TAXIS:
+        return True
+    if incident['type'] in BLACKLISTED_INCIDENT_TYPES:
+        return True
+    # Blacklist speed violations above 200 km/h
+    if incident['type'] == 'Speed Violation' and incident['speed'] > 200:
+        return True
+    return False
+
 # Redis data fetcher
 def fetch_redis_data():
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
@@ -73,7 +88,7 @@ def fetch_redis_data():
                         'speed': 0,  # Default speed if not available
                         'timestamp': datetime.now().strftime('%H:%M:%S')
                     }
-
+                
                 # Check for incidents (speed > 60 km/h)
                 speed = taxi_data[taxi_id]['speed']
                 if speed > 60:
@@ -85,13 +100,14 @@ def fetch_redis_data():
                         'lng': taxi_data[taxi_id]['lng'],
                         'timestamp': datetime.now().strftime('%H:%M:%S')
                     }
-                    # Check if this incident is already logged
-                    if not any(i['taxi_id'] == taxi_id and
-                               i['speed'] == speed and
-                               i['timestamp'] == incident['timestamp']
-                               for i in incident_log):
-                        incident_log.appendleft(incident)
-
+                    # Blacklist check
+                    if not is_blacklisted_incident(incident):
+                        # Check if this incident is already logged
+                        if not any(i['taxi_id'] == taxi_id and
+                                   i['speed'] == speed and
+                                   i['timestamp'] == incident['timestamp']
+                                   for i in incident_log):
+                            incident_log.appendleft(incident)
             time.sleep(1)  # Poll every second
 
         except Exception as e:
