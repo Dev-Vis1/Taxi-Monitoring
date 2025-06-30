@@ -32,6 +32,9 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 10
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 10485760  
     restart: unless-stopped
     networks:
       - taxi_network
@@ -50,6 +53,11 @@ services:
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
 
   redis:
     image: redis:latest
@@ -76,7 +84,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M
+          cpus: "0.5"
   
   flink-jobmanager:
     image: flink:1.18.1-scala_2.12-java17
@@ -92,6 +101,10 @@ services:
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 20G
 
   
   flink-taskmanager:
@@ -103,7 +116,7 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 5  
+        taskmanager.numberOfTaskSlots: 10  
     restart: unless-stopped
     networks:
       - taxi_network

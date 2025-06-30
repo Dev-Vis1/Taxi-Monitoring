@@ -76,8 +76,8 @@ def fetch_redis_data():
                 latest = get_latest_location(taxi_id)
                 if location_data:
                     taxi_data[taxi_id] = {
-                        'lat': float(location_data.get(b'lat', 0)),
-                        'lng': float(location_data.get(b'lon', 0)),
+                        'lat': float(location_data.get(b'lon', 0)),
+                        'lng': float(location_data.get(b'lat', 0)),
                         'speed': float(r.hget("metrics:speed", taxi_id) or 0),
                         'timestamp': location_data.get(b'time', b'').decode()
                     }
