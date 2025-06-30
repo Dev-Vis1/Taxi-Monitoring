@@ -14,8 +14,8 @@ def get_latest_location(taxi_id):
     print(f"Redis data for {key}: {data}")  # Debugging log
     if data and "lat" in data and "lon" in data:
         return {
-            "latitude": float(data["lat"]),
-            "longitude": float(data["lon"]),
+            "latitude": float(data["lon"]),
+            "longitude": float(data["lat"]),
             "timestamp": data.get("time", "")
         }
     return None  # Return None if data is invalid or missing
