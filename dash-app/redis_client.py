@@ -1,9 +1,21 @@
 # redis_client.py
 import redis
 import json
+from datetime import datetime, timedelta
+import time
 
 # Connect to Redis running in Docker
 r = redis.Redis(host='redis', port=6379, decode_responses=True)
+
+# Simulation state - Optimized for real-time streaming
+simulation_start_time = None
+simulation_speed = 2  # Seconds between each simulation step
+current_step = 0
+
+# Cache for taxi data ranges (for performance)
+taxi_data_cache = {}
+taxi_route_cache = {}
+cache_expiry = 300  # 5 minutes
 
 def get_all_taxi_ids():
     return [key.split(":")[1] for key in r.scan_iter("location:*")]
@@ -11,18 +23,326 @@ def get_all_taxi_ids():
 def get_latest_location(taxi_id):
     key = f"location:{taxi_id}"
     data = r.hgetall(key)
-    print(f"Redis data for {key}: {data}")  # Debugging log
     if data and "lat" in data and "lon" in data:
+        # Get speed from the separate metrics:speed hash
+        speed = get_taxi_speed(taxi_id)
         return {
             "latitude": float(data["lon"]),
             "longitude": float(data["lat"]),
-            "timestamp": data.get("time", "")
+            "timestamp": data.get("time", ""),
+            "speed": speed
         }
-    return None  # Return None if data is invalid or missing
+    return None
+
+def get_taxi_speed(taxi_id):
+    """Get current speed from Redis metrics"""
+    speed_data = r.hget("metrics:speed", taxi_id)
+    if speed_data:
+        try:
+            return float(speed_data)
+        except (ValueError, TypeError):
+            return 0.0
+    return 0.0
+
+def get_taxi_average_speed(taxi_id):
+    """Get average speed from Redis metrics"""
+    avg_speed_data = r.hget("metrics:avgSpeed", taxi_id)
+    if avg_speed_data:
+        try:
+            return float(avg_speed_data)
+        except (ValueError, TypeError):
+            return 0.0
+    return 0.0
+
+def get_taxi_distance(taxi_id):
+    """Get total distance from Redis metrics"""
+    distance_data = r.hget("metrics:distance", taxi_id)
+    if distance_data:
+        try:
+            return float(distance_data)
+        except (ValueError, TypeError):
+            return 0.0
+    return 0.0
 
 def get_route(taxi_id):
     key = f"route:{taxi_id}"
-    route_points = r.lrange(key, -100, -1)  # Fetch the last 100 points only
+    route_points = r.lrange(key, 0, -1)  # Get all route points
     if route_points:
-        return [json.loads(point) for point in route_points]
-    return []  # Return an empty list if no route data exists
+        try:
+            parsed_points = [json.loads(point) for point in route_points]
+            # Sort by timestamp to ensure chronological order
+            parsed_points.sort(key=lambda x: x.get('timestamp', ''))
+            return parsed_points
+        except json.JSONDecodeError as e:
+            print(f"Error parsing route data for {taxi_id}: {e}")
+            return []
+    return []
+
+def get_all_sorted_timestamps():
+    """Get all unique timestamps from the data, sorted chronologically"""
+    global all_sorted_timestamps
+    
+    if all_sorted_timestamps:
+        return all_sorted_timestamps
+    
+    all_timestamps = set()
+    all_taxi_ids = get_all_taxi_ids()
+    
+    for taxi_id in all_taxi_ids:
+        route_data = get_route(taxi_id)
+        for position in route_data:
+            if 'timestamp' in position:
+                all_timestamps.add(position['timestamp'])
+    
+    all_sorted_timestamps = sorted(list(all_timestamps))
+    print(f"Found {len(all_sorted_timestamps)} unique timestamps")
+    if all_sorted_timestamps:
+        print(f"First timestamp: {all_sorted_timestamps[0]}")
+        print(f"Last timestamp: {all_sorted_timestamps[-1]}")
+    
+    return all_sorted_timestamps
+
+def get_current_data_timestamp():
+    """Get the current timestamp based on stepping through data points every few seconds"""
+    global simulation_start_time, current_timestamp_index
+    
+    timestamps = get_all_sorted_timestamps()
+    if not timestamps:
+        return datetime.now()
+    
+    if simulation_start_time is None:
+        simulation_start_time = time.time()
+        current_timestamp_index = 0
+    
+    # Calculate which timestamp we should be at based on elapsed time
+    elapsed_real_time = time.time() - simulation_start_time
+    target_index = int(elapsed_real_time / simulation_speed) % len(timestamps)
+    
+    current_timestamp_index = target_index
+    current_timestamp_str = timestamps[current_timestamp_index]
+    
+    try:
+        return datetime.strptime(current_timestamp_str, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return datetime.now()
+
+def get_current_simulation_time():
+    """Get current simulation time based on stepping through actual data timestamps"""
+    return get_current_data_timestamp()
+
+def get_taxi_position_at_timestamp(taxi_id, target_timestamp_str):
+    """Get taxi position for a specific timestamp string - only if taxi is active at this time"""
+    route_data = get_route(taxi_id)
+    if not route_data:
+        return None
+    
+    # Look for exact timestamp match first
+    for position in route_data:
+        if position.get('timestamp') == target_timestamp_str:
+            return position
+    
+    # If no exact match, find the closest timestamp within a reasonable time window
+    closest_position = None
+    min_time_diff = float('inf')
+    max_time_window = 3600  # Only show taxi if it has data within 1 hour of target time
+    
+    try:
+        target_time = datetime.strptime(target_timestamp_str, '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        return None
+    
+    for position in route_data:
+        if 'timestamp' not in position:
+            continue
+        try:
+            pos_time = datetime.strptime(position['timestamp'], '%Y-%m-%d %H:%M:%S')
+            time_diff = abs((pos_time - target_time).total_seconds())
+            
+            # Only consider positions within the time window
+            if time_diff <= max_time_window and time_diff < min_time_diff:
+                min_time_diff = time_diff
+                closest_position = position
+        except (ValueError, TypeError):
+            continue
+    
+    return closest_position
+
+def get_active_taxis_at_timestamp(target_timestamp_str, max_taxis=1000):
+    """Get all active taxis at a specific timestamp - optimized for large numbers with real speed data"""
+    all_taxi_ids = get_all_taxi_ids()
+    active_taxis = {}
+    
+    # Limit the number of taxis to avoid performance issues
+    limited_taxi_ids = all_taxi_ids[:max_taxis]
+    
+    for taxi_id in limited_taxi_ids:
+        position = get_taxi_position_at_timestamp(taxi_id, target_timestamp_str)
+        if position:  # Only include taxis that are active at this time
+            # Get real speed from Redis metrics (calculated by Flink)
+            speed = get_taxi_speed(taxi_id)
+            active_taxis[taxi_id] = {
+                'lat': position.get('latitude', 0),
+                'lng': position.get('longitude', 0),
+                'speed': speed,  # Real speed from Flink processing
+                'timestamp': position.get('timestamp', '')
+            }
+    
+    return active_taxis
+
+def get_taxi_clusters(active_taxis, cluster_distance=0.01):
+    """Group nearby taxis into clusters to reduce rendering load"""
+    clusters = []
+    processed = set()
+    
+    for taxi_id, data in active_taxis.items():
+        if taxi_id in processed:
+            continue
+            
+        cluster = {
+            'center_lat': data['lat'],
+            'center_lng': data['lng'],
+            'taxi_count': 1,
+            'avg_speed': data['speed'],
+            'taxi_ids': [taxi_id]
+        }
+        processed.add(taxi_id)
+        
+        # Find nearby taxis
+        for other_taxi_id, other_data in active_taxis.items():
+            if other_taxi_id in processed:
+                continue
+                
+            # Simple distance calculation
+            lat_diff = abs(data['lat'] - other_data['lat'])
+            lng_diff = abs(data['lng'] - other_data['lng'])
+            
+            if lat_diff < cluster_distance and lng_diff < cluster_distance:
+                cluster['taxi_count'] += 1
+                cluster['avg_speed'] = (cluster['avg_speed'] + other_data['speed']) / 2
+                cluster['taxi_ids'].append(other_taxi_id)
+                processed.add(other_taxi_id)
+        
+        clusters.append(cluster)
+    
+    return clusters
+
+def calculate_speed(lat1, lon1, lat2, lon2, time1, time2):
+    """
+    Calculate speed between two GPS points using Haversine formula
+    Returns speed in km/h
+    """
+    from math import radians, cos, sin, asin, sqrt
+    
+    # Convert decimal degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371  # Radius of earth in kilometers
+    distance = c * r
+    
+    # Calculate time difference in hours
+    try:
+        t1 = datetime.strptime(time1, '%Y-%m-%d %H:%M:%S')
+        t2 = datetime.strptime(time2, '%Y-%m-%d %H:%M:%S')
+        time_diff = abs((t2 - t1).total_seconds()) / 3600  # Convert to hours
+        
+        if time_diff > 0:
+            speed = distance / time_diff  # km/h
+            return min(speed, 200)  # Cap at reasonable speed (200 km/h)
+        else:
+            return 0
+    except (ValueError, ZeroDivisionError):
+        return 0
+
+def get_taxi_relative_position(taxi_id, simulation_step):
+    """
+    Get taxi position based on relative simulation step.
+    Each taxi follows its own timeline from start to finish.
+    This ensures all taxis are always moving regardless of their absolute timestamps.
+    Uses real speed data from Flink processing.
+    """
+    route_data = get_route(taxi_id)
+    if not route_data:
+        return None
+    
+    # Calculate which data point to show based on simulation step
+    total_points = len(route_data)
+    if total_points == 0:
+        return None
+    
+    # Use modulo to cycle through the route continuously
+    current_index = simulation_step % total_points
+    
+    position = route_data[current_index]
+    
+    # Get real speed from Redis metrics (calculated by Flink using Haversine formula)
+    speed = get_taxi_speed(taxi_id)
+    
+    return {
+        'latitude': position.get('latitude', 0),
+        'longitude': position.get('longitude', 0),
+        'speed': speed,  # Real speed from Flink processing
+        'timestamp': position.get('timestamp', ''),
+        'route_progress': (current_index / total_points) * 100  # Progress through route
+    }
+
+def get_all_active_taxis_relative(max_taxis=1000):
+    """
+    Get all active taxis with their current positions using relative timeline.
+    Optimized for high throughput processing.
+    """
+    global current_step
+    
+    all_taxi_ids = get_all_taxi_ids()
+    # Limit number of taxis for performance, but show more for demonstration
+    if len(all_taxi_ids) > max_taxis:
+        all_taxi_ids = all_taxi_ids[:max_taxis]
+    
+    active_taxis = {}
+    
+    for taxi_id in all_taxi_ids:
+        position = get_taxi_relative_position(taxi_id, current_step)
+        if position:
+            active_taxis[taxi_id] = {
+                'lat': position['latitude'],
+                'lng': position['longitude'], 
+                'speed': position['speed'],
+                'timestamp': position['timestamp'],
+                'progress': position['route_progress']
+            }
+    
+    return active_taxis
+
+def advance_simulation_step():
+    """Advance the simulation by one step (called every few seconds)"""
+    global current_step, simulation_start_time
+    
+    if simulation_start_time is None:
+        simulation_start_time = time.time()
+        current_step = 0
+    else:
+        current_step += 1
+    
+    return current_step
+
+def get_current_simulation_step():
+    """Get the current simulation step"""
+    global simulation_start_time, current_step
+    
+    if simulation_start_time is None:
+        simulation_start_time = time.time()
+        current_step = 0
+        return current_step
+    
+    # Auto-advance step based on elapsed time
+    elapsed_time = time.time() - simulation_start_time
+    target_step = int(elapsed_time / simulation_speed)
+    
+    if target_step > current_step:
+        current_step = target_step
+    
+    return current_step
