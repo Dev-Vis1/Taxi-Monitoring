@@ -1,37 +1,88 @@
-# redis_client.py
+# redis_client.py - OPTIMIZED FOR HIGH THROUGHPUT
 import redis
 import json
 from datetime import datetime, timedelta
 import time
+import logging
 
-# Connect to Redis running in Docker
-r = redis.Redis(host='redis', port=6379, decode_responses=True)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Simplified Redis connection - fix the connection pool issue
+r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True,
+                socket_timeout=10, socket_connect_timeout=10)
 
 # Simulation state - Optimized for real-time streaming
 simulation_start_time = None
 simulation_speed = 2  # Seconds between each simulation step
 current_step = 0
 
-# Cache for taxi data ranges (for performance)
+# Enhanced caching system
 taxi_data_cache = {}
 taxi_route_cache = {}
-cache_expiry = 300  # 5 minutes
+taxi_ids_cache = None
+taxi_ids_cache_time = 0
+cache_expiry = 60  # Reduced to 1 minute for more frequent updates
 
 def get_all_taxi_ids():
-    return [key.split(":")[1] for key in r.scan_iter("location:*")]
+    """Get all taxi IDs with highly optimized caching and batch processing"""
+    global taxi_ids_cache, taxi_ids_cache_time
+    
+    current_time = time.time()
+    if taxi_ids_cache is None or (current_time - taxi_ids_cache_time) > cache_expiry:
+        try:
+            # Use SCAN with larger COUNT for better performance with many keys
+            keys = []
+            cursor = 0
+            while True:
+                cursor, partial_keys = r.scan(cursor=cursor, match="location:*", count=10000)
+                keys.extend(partial_keys)
+                if cursor == 0:
+                    break
+            
+            taxi_ids = [key.split(":")[1] for key in keys if key.startswith("location:")]
+            taxi_ids_cache = taxi_ids
+            taxi_ids_cache_time = current_time
+            logger.info(f"Refreshed taxi IDs cache: {len(taxi_ids)} taxis")
+        except Exception as e:
+            logger.error(f"Error fetching taxi IDs: {e}")
+            return taxi_ids_cache or []
+    
+    return taxi_ids_cache
 
 def get_latest_location(taxi_id):
+    """Get latest location with enhanced error handling and speed integration"""
     key = f"location:{taxi_id}"
-    data = r.hgetall(key)
-    if data and "lat" in data and "lon" in data:
-        # Get speed from the separate metrics:speed hash
-        speed = get_taxi_speed(taxi_id)
-        return {
-            "latitude": float(data["lon"]),
-            "longitude": float(data["lat"]),
-            "timestamp": data.get("time", ""),
-            "speed": speed
-        }
+    try:
+        # Use pipeline for multiple operations
+        pipe = r.pipeline()
+        pipe.hgetall(key)
+        pipe.hget("metrics:speed", taxi_id)
+        results = pipe.execute()
+        
+        data = results[0]
+        speed_data = results[1]
+        
+        if data and "lat" in data and "lon" in data:
+            # Parse speed safely
+            speed = 0.0
+            if speed_data:
+                try:
+                    speed = float(speed_data)
+                except (ValueError, TypeError):
+                    speed = 0.0
+            
+            # FIXED: Redis stores lat/lon correctly, don't swap them
+            return {
+                "latitude": float(data["lat"]),   # lat is latitude
+                "longitude": float(data["lon"]),  # lon is longitude  
+                "timestamp": data.get("time", ""),
+                "speed": speed
+            }
+    except Exception as e:
+        logger.error(f"Error fetching location for taxi {taxi_id}: {e}")
+    
     return None
 
 def get_taxi_speed(taxi_id):
@@ -56,13 +107,28 @@ def get_taxi_average_speed(taxi_id):
 
 def get_taxi_distance(taxi_id):
     """Get total distance from Redis metrics"""
-    distance_data = r.hget("metrics:distance", taxi_id)
-    if distance_data:
-        try:
+    try:
+        distance_data = r.hget("metrics:distance", taxi_id)
+        if distance_data:
             return float(distance_data)
-        except (ValueError, TypeError):
-            return 0.0
+    except (ValueError, TypeError, Exception) as e:
+        logger.error(f"Error fetching distance for taxi {taxi_id}: {e}")
     return 0.0
+
+def get_all_taxi_distances():
+    """Get total distances for all taxis"""
+    try:
+        all_distances = r.hgetall("metrics:distance")
+        total_distance = 0.0
+        for taxi_id, distance_str in all_distances.items():
+            try:
+                total_distance += float(distance_str)
+            except (ValueError, TypeError):
+                continue
+        return total_distance
+    except Exception as e:
+        logger.error(f"Error fetching all taxi distances: {e}")
+        return 0.0
 
 def get_route(taxi_id):
     key = f"route:{taxi_id}"
