@@ -35,6 +35,14 @@ public class MainJob {
     public static void main(String[] args) throws Exception {
 
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        
+        // OPTIMIZATION: Configure environment for high throughput
+        env.setParallelism(20);  // Increased parallelism
+        env.enableCheckpointing(30000);  // Checkpoint every 30 seconds
+        env.getConfig().setAutoWatermarkInterval(1000);  // More frequent watermarks
+        
+        // Configure for better performance with large datasets
+        env.getConfig().enableObjectReuse();  // Reuse objects for better performance
 
         var source = KafkaSource.<TaxiLocation>builder()
                 .setBootstrapServers("kafka:29092")
