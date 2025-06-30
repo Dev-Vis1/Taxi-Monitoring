@@ -11,6 +11,7 @@ from threading import Thread
 from collections import deque
 import time
 from redis_client import get_all_taxi_ids, get_latest_location, get_route
+import pytz
 
 # Initialize the Dash app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -22,6 +23,8 @@ REDIS_PORT = 6379
 REDIS_DB = 0
 
 # Data storage
+violations_today = 0  
+
 taxi_data = {}
 incident_log = deque(maxlen=20)
 geo_json = {
@@ -67,7 +70,9 @@ def is_blacklisted_incident(incident):
 
 # Redis data fetcher
 def fetch_redis_data():
+    global violations_today
     r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+    tz = pytz.timezone('Europe/Berlin')
     while True:
         try:
             taxi_ids = list(set(get_all_taxi_ids() + [key.decode().split(":")[1] for key in r.keys("location:*")]))
@@ -86,9 +91,8 @@ def fetch_redis_data():
                         'lat': latest["latitude"],
                         'lng': latest["longitude"],
                         'speed': 0,  # Default speed if not available
-                        'timestamp': datetime.now().strftime('%H:%M:%S')
+                        'timestamp': datetime.now(tz).strftime('%H:%M:%S')
                     }
-                
                 # Check for incidents (speed > 60 km/h)
                 speed = taxi_data[taxi_id]['speed']
                 if speed > 60:
@@ -98,18 +102,15 @@ def fetch_redis_data():
                         'speed': speed,
                         'lat': taxi_data[taxi_id]['lat'],
                         'lng': taxi_data[taxi_id]['lng'],
-                        'timestamp': datetime.now().strftime('%H:%M:%S')
+                        'timestamp': datetime.now(tz).strftime('%H:%M:%S')
                     }
                     # Blacklist check
                     if not is_blacklisted_incident(incident):
                         # Check if this incident is already logged
-                        if not any(i['taxi_id'] == taxi_id and
-                                   i['speed'] == speed and
-                                   i['timestamp'] == incident['timestamp']
-                                   for i in incident_log):
+                        if not any(i['taxi_id'] == taxi_id and i['speed'] == speed and i['timestamp'] == incident['timestamp'] for i in incident_log):
                             incident_log.appendleft(incident)
+                            violations_today += 1  # Increment total violations
             time.sleep(1)  # Poll every second
-
         except Exception as e:
             print(f"Redis error: {e}")
             time.sleep(5)  # Wait before retrying if error occurs
@@ -130,9 +131,9 @@ app.layout = dbc.Container(fluid=True, children=[
 
             html.Div([
                 dbc.Badge([
-                    html.Span(className="pulse-dot me-2"),
+                    html.Span(className="pulse-dot me-2", style={"backgroundColor": "#00ff00", "width": "10px", "height": "10px", "borderRadius": "50%", "display": "inline-block", "marginRight": "8px", "animation": "pulse 1.5s infinite"}),
                     "Real-time"
-                ], color="primary", className="me-3"),
+                ], color="primary", className="me-3 d-flex align-items-center"),
 
                 html.Div(id="current-time", className="text-white")
             ], className="d-flex align-items-center")
@@ -264,7 +265,7 @@ app.layout = dbc.Container(fluid=True, children=[
     ),
 
     # Interval for updates
-    dcc.Interval(id='update-interval', interval=2000, n_intervals=0),
+    dcc.Interval(id='update-interval', interval=5000, n_intervals=0),
 ])
 
 # CSS styles
@@ -330,7 +331,9 @@ app.css.append_css({
     Input('update-interval', 'n_intervals')
 )
 def update_time(n):
-    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    tz = pytz.timezone('Europe/Berlin')
+    now = datetime.now(tz)
+    return now.strftime('%Y-%m-%d %H:%M:%S')
 
 @app.callback(
     [Output('taxi-map', 'figure'),
@@ -347,6 +350,7 @@ def update_time(n):
     [State('taxi-map', 'relayoutData')]
 )
 def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayout_data):
+    global violations_today
     ctx = dash.callback_context
     zoom_level = 12
     
@@ -447,7 +451,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
                     name="Route",
                     hoverinfo='none'
                 ))
-    
+
     # Update map layout
     map_fig.update_layout(
         map_style="open-street-map",
@@ -461,7 +465,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     
     # Calculate statistics
     active_taxis = len(taxi_data_snapshot)
-    violations = len(incident_log)
+    violations = violations_today  # Use the total violations counter
     
     # Calculate average speed
     avg_speed = 0
