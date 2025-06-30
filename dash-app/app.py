@@ -2,10 +2,8 @@ import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
-import plotly.express as px
 import pandas as pd
 from datetime import datetime
-import json
 import redis
 from threading import Thread
 from collections import deque
@@ -14,8 +12,18 @@ from redis_client import get_all_taxi_ids, get_latest_location, get_route
 import pytz
 
 # Initialize the Dash app
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        dbc.themes.BOOTSTRAP,
+        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'
+    ]
+)
 server = app.server
+
+# Mapbox Configuration (REPLACE WITH YOUR TOKEN)
+MAPBOX_ACCESS_TOKEN = "pk.eyJ1Ijoic3VubWVldDU1IiwiYSI6ImNtY2ozMjBrMzA0dGkyaXNhM3Q0b3c1Z2IifQ.GPtW45RgkjnbsaGc2GOA3w"  # Get from mapbox.com
+MAPBOX_STYLE = "streets"  # Other options: "light", "dark", "outdoors", "satellite"
 
 # Redis Configuration
 REDIS_HOST = 'redis'
@@ -27,32 +35,6 @@ violations_today = 0
 
 taxi_data = {}
 incident_log = deque(maxlen=20)
-geo_json = {
-    "type": "FeatureCollection",
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {"name": "Dongcheng"},
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[
-                    [116.39, 39.91], [116.42, 39.91], [116.42, 39.93], [116.39, 39.93], [116.39, 39.91]
-                ]]
-            }
-        },
-        {
-            "type": "Feature",
-            "properties": {"name": "Xicheng"},
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[
-                    [116.35, 39.91], [116.39, 39.91], [116.39, 39.93], [116.35, 39.93], [116.35, 39.91]
-                ]]
-            }
-        }
-    ]
-}
-
 
 # Blacklist for taxi IDs or incident types
 BLACKLISTED_TAXIS = set()  
@@ -63,61 +45,65 @@ def is_blacklisted_incident(incident):
         return True
     if incident['type'] in BLACKLISTED_INCIDENT_TYPES:
         return True
-    # Blacklist speed violations above 200 km/h
     if incident['type'] == 'Speed Violation' and incident['speed'] >= 200:
         return True
     return False
 
-# Redis data fetcher
-def fetch_redis_data():
+# Real-time data fetcher using current locations and calculated speeds
+def fetch_simulation_data():
     global violations_today
-    r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB)
+    print("=== Starting real-time data fetcher thread ===")
     tz = pytz.timezone('Europe/Berlin')
     while True:
         try:
-            taxi_ids = list(set(get_all_taxi_ids() + [key.decode().split(":")[1] for key in r.keys("location:*")]))
-            for taxi_id in taxi_ids:
-                location_data = r.hgetall(f"location:{taxi_id}")
-                latest = get_latest_location(taxi_id)
-                if location_data:
+            print("Fetching taxi data...")
+            # Get all taxi IDs and their current locations
+            all_taxi_ids = get_all_taxi_ids()
+            print(f"Found {len(all_taxi_ids)} taxi IDs")
+            
+            # Clear old data and get current real-time positions
+            taxi_data.clear()
+            
+            for taxi_id in all_taxi_ids:
+                # Get current location from Redis
+                location = get_latest_location(taxi_id)
+                if location:
                     taxi_data[taxi_id] = {
-                        'lat': float(location_data.get(b'lon', 0)),
-                        'lng': float(location_data.get(b'lat', 0)),
-                        'speed': float(r.hget("metrics:speed", taxi_id) or 0),
-                        'timestamp': location_data.get(b'time', b'').decode()
+                        'lat': location["latitude"],
+                        'lng': location["longitude"],
+                        'speed': location["speed"],
+                        'timestamp': location["timestamp"] if location["timestamp"] else datetime.now(tz).strftime('%H:%M:%S')
                     }
-                elif latest:
-                    taxi_data[taxi_id] = {
-                        'lat': latest["latitude"],
-                        'lng': latest["longitude"],
-                        'speed': 0,  # Default speed if not available
-                        'timestamp': datetime.now(tz).strftime('%H:%M:%S')
-                    }
-                # Check for incidents (speed > 60 km/h)
-                speed = taxi_data[taxi_id]['speed']
-                if speed > 60:
-                    incident = {
-                        'taxi_id': taxi_id,
-                        'type': 'Speed Violation',
-                        'speed': speed,
-                        'lat': taxi_data[taxi_id]['lat'],
-                        'lng': taxi_data[taxi_id]['lng'],
-                        'timestamp': datetime.now(tz).strftime('%H:%M:%S')
-                    }
-                    # Blacklist check
-                    if not is_blacklisted_incident(incident):
-                        # Check if this incident is already logged
-                        if not any(i['taxi_id'] == taxi_id and i['speed'] == speed and i['timestamp'] == incident['timestamp'] for i in incident_log):
-                            incident_log.appendleft(incident)
-                            violations_today += 1  # Increment total violations
+                    
+                    # Check for incidents (speed > 60 km/h)
+                    speed = taxi_data[taxi_id]['speed']
+                    if speed > 60:
+                        incident = {
+                            'taxi_id': taxi_id,
+                            'type': 'Speed Violation',
+                            'speed': speed,
+                            'lat': taxi_data[taxi_id]['lat'],
+                            'lng': taxi_data[taxi_id]['lng'],
+                            'timestamp': datetime.now(tz).strftime('%H:%M:%S')
+                        }
+                        # Blacklist check
+                        if not is_blacklisted_incident(incident):
+                            # Check if this incident is already logged
+                            if not any(i['taxi_id'] == taxi_id and i['speed'] == speed and i['timestamp'] == incident['timestamp'] for i in incident_log):
+                                incident_log.appendleft(incident)
+                                violations_today += 1  # Increment total violations
             time.sleep(1)  # Poll every second
         except Exception as e:
-            print(f"Redis error: {e}")
-            time.sleep(5)  # Wait before retrying if error occurs
+            print(f"Real-time data error: {e}")
+            import traceback
+            traceback.print_exc()
+            time.sleep(5)
 
-# Start Redis fetcher in a separate thread
-redis_thread = Thread(target=fetch_redis_data, daemon=True)
-redis_thread.start()
+print("=== Starting simulation thread ===")
+# Start simulation fetcher thread
+simulation_thread = Thread(target=fetch_simulation_data, daemon=True)
+simulation_thread.start()
+print("=== Simulation thread started ===")
 
 # Dashboard layout
 app.layout = dbc.Container(fluid=True, children=[
@@ -128,7 +114,6 @@ app.layout = dbc.Container(fluid=True, children=[
                 html.I(className="fas fa-taxi me-2"),
                 html.Span("Beijing Taxi Monitoring Dashboard", className="navbar-brand mb-0 h1")
             ], className="d-flex align-items-center"),
-
             html.Div([
                 dbc.Badge([
                     html.Span(className="pulse-dot me-2", style={"backgroundColor": "#00ff00", "width": "10px", "height": "10px", "borderRadius": "50%", "display": "inline-block", "marginRight": "8px", "animation": "pulse 1.5s infinite"}),
@@ -151,101 +136,81 @@ app.layout = dbc.Container(fluid=True, children=[
                 dbc.CardHeader([
                     html.H4("Taxi Activity Map", className="card-title"),
                     html.Div([
-                        dbc.Button(html.I(className="fas fa-search-plus"), color="light", className="me-2", id="zoom-in"),
-                        dbc.Button(html.I(className="fas fa-search-minus"), color="light", className="me-2", id="zoom-out"),
-                        dbc.Button(html.I(className="fas fa-globe-asia"), color="light", id="reset-view"),
+                        dbc.ButtonGroup([
+                            dbc.Button(html.I(className="fas fa-search-plus"), id="zoom-in", color="light"),
+                            dbc.Button(html.I(className="fas fa-search-minus"), id="zoom-out", color="light"),
+                            dbc.Button(html.I(className="fas fa-crosshairs"), id="reset-view", color="light"),
+                        ], className="me-2"),
                         dcc.Dropdown(
                             id="taxi-id",
                             options=[{"label": tid, "value": tid} for tid in get_all_taxi_ids()],
-                            placeholder="Select a Taxi to Track",
-                            style={"width": "300px", "margin-left": "10px"},
+                            placeholder="Select Taxi to Track",
+                            style={"width": "300px"},
                             clearable=True
                         )
                     ], className="float-end")
                 ], className="d-flex justify-content-between align-items-center"),
-
                 dcc.Graph(
                     id='taxi-map',
-                    config={'displayModeBar': False},
+                    config={'scrollZoom': True, 'displayModeBar': False},
                     style={'height': '500px'}
                 )
             ], className="mb-4"),
 
             # Stats cards
             dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
+                dbc.Col(dbc.Card([
+                    dbc.CardBody([
+                        html.Div([
                             html.Div([
-                                html.Div([
-                                    html.P("Active Taxis", className="text-muted small mb-1"),
-                                    html.H3(id="active-taxis", children="0", className="mb-0")
-                                ]),
-                                html.Div(
-                                    html.I(className="fas fa-taxi fa-2x text-primary"),
-                                    className="bg-primary bg-opacity-10 p-3 rounded-circle"
-                                )
-                            ], className="d-flex justify-content-between align-items-center")
-                        ])
+                                html.P("Active Taxis", className="text-muted small mb-1"),
+                                html.H3(id="active-taxis", children="0", className="mb-0")
+                            ]),
+                            html.Div(html.I(className="fas fa-taxi fa-2x text-primary"),
+                                   className="bg-primary bg-opacity-10 p-3 rounded-circle")
+                        ], className="d-flex justify-content-between align-items-center")
                     ])
-                ], md=4),
-
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
+                ]), md=4),
+                dbc.Col(dbc.Card([
+                    dbc.CardBody([
+                        html.Div([
                             html.Div([
-                                html.Div([
-                                    html.P("Violations Today", className="text-muted small mb-1"),
-                                    html.H3(id="violations-today", children="0", className="mb-0")
-                                ]),
-                                html.Div(
-                                    html.I(className="fas fa-exclamation-triangle fa-2x text-danger"),
-                                    className="bg-danger bg-opacity-10 p-3 rounded-circle"
-                                )
-                            ], className="d-flex justify-content-between align-items-center")
-                        ])
+                                html.P("Violations Today", className="text-muted small mb-1"),
+                                html.H3(id="violations-today", children="0", className="mb-0")
+                            ]),
+                            html.Div(html.I(className="fas fa-exclamation-triangle fa-2x text-danger"),
+                                   className="bg-danger bg-opacity-10 p-3 rounded-circle")
+                        ], className="d-flex justify-content-between align-items-center")
                     ])
-                ], md=4),
-
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
+                ]), md=4),
+                dbc.Col(dbc.Card([
+                    dbc.CardBody([
+                        html.Div([
                             html.Div([
-                                html.Div([
-                                    html.P("Avg. Speed", className="text-muted small mb-1"),
-                                    html.H3(id="avg-speed", children="0 km/h", className="mb-0")
-                                ]),
-                                html.Div(
-                                    html.I(className="fas fa-tachometer-alt fa-2x text-success"),
-                                    className="bg-success bg-opacity-10 p-3 rounded-circle"
-                                )
-                            ], className="d-flex justify-content-between align-items-center")
-                        ])
+                                html.P("Avg. Speed", className="text-muted small mb-1"),
+                                html.H3(id="avg-speed", children="0 km/h", className="mb-0")
+                            ]),
+                            html.Div(html.I(className="fas fa-tachometer-alt fa-2x text-success"),
+                                   className="bg-success bg-opacity-10 p-3 rounded-circle")
+                        ], className="d-flex justify-content-between align-items-center")
                     ])
-                ], md=4)
+                ]), md=4)
             ], className="mb-4")
         ]),
 
         # Right column
         dbc.Col(md=4, children=[
-            # Incidents
             dbc.Card([
                 dbc.CardHeader([
                     html.I(className="fas fa-exclamation-circle text-danger me-2"),
                     html.H4("Recent Incidents", className="d-inline-block mb-0")
                 ]),
-
                 dbc.CardBody([
                     html.Div(id="incidents-container", className="overflow-auto", style={"maxHeight": "400px"})
                 ])
             ], className="mb-4"),
-
-            # Speed chart
             dbc.Card([
-                dbc.CardHeader([
-                    html.H4("Speed Distribution", className="card-title")
-                ]),
-
+                dbc.CardHeader(html.H4("Speed Distribution", className="card-title")),
                 dbc.CardBody([
                     dcc.Graph(id="speed-chart", config={'displayModeBar': False}, style={'height': '200px'})
                 ])
@@ -256,7 +221,7 @@ app.layout = dbc.Container(fluid=True, children=[
     # Footer
     dbc.Navbar(
         dbc.Container(
-            html.P("Beijing Taxi Monitoring System ©️ 2023 | Real-time Stream Processing Dashboard",
+            html.P("Beijing Taxi Monitoring System © 2023 | Real-time Stream Processing Dashboard",
                    className="text-center w-100 mb-0"),
         ),
         color="dark",
@@ -270,18 +235,8 @@ app.layout = dbc.Container(fluid=True, children=[
 
 # CSS styles
 app.css.append_css({
-    'external_url': 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css'
-})
-
-app.css.append_css({
-    'external_url': 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/leaflet.css'
-})
-
-app.css.append_css({
     'external_url': 'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'
 })
-
-# Custom CSS
 app.css.append_css({
     'external_url': '''
         .pulse-dot {
@@ -292,35 +247,20 @@ app.css.append_css({
             background-color: #0f0;
             animation: pulse 2s infinite;
         }
-
         @keyframes pulse {
             0% { opacity: 1; }
             50% { opacity: 0.5; }
             100% { opacity: 1; }
         }
-        
         .incident-card {
             transition: all 0.3s ease;
             padding: 10px;
             border-bottom: 1px solid #eee;
         }
-        
         .incident-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
             background-color: #f8f9fa;
-        }
-        
-        .map-marker {
-            background-color: #0d6efd;
-            color: white;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
     '''
 })
@@ -347,95 +287,107 @@ def update_time(n):
      Input('zoom-out', 'n_clicks'),
      Input('reset-view', 'n_clicks'),
      Input('taxi-id', 'value')],
-    [State('taxi-map', 'relayoutData')]
+    [State('taxi-map', 'relayoutData'),
+     State('taxi-map', 'figure')]
 )
-def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayout_data):
+def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayout_data, current_figure):
     global violations_today
     ctx = dash.callback_context
+    
+    # Default values
     zoom_level = 12
     
-    # Handle map zoom buttons
+    # Get current map parameters from the figure if available
+    if current_figure and 'layout' in current_figure and 'mapbox' in current_figure['layout']:
+        current_mapbox = current_figure['layout']['mapbox']
+        zoom_level = current_mapbox.get('zoom', zoom_level)
+        center_lat = current_mapbox['center'].get('lat', 39.9042)
+        center_lon = current_mapbox['center'].get('lon', 116.4074)
+    else:
+        center_lat = 39.9042
+        center_lon = 116.4074
+    
+    # Handle zoom controls
     if ctx.triggered:
         trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
         if trigger_id == 'zoom-in':
-            zoom_level = (relayout_data.get('mapbox.zoom', 12) + 1) if relayout_data else 13
+            zoom_level += 1
         elif trigger_id == 'zoom-out':
-            zoom_level = (relayout_data.get('mapbox.zoom', 12) - 1) if relayout_data else 11
+            zoom_level -= 1
         elif trigger_id == 'reset-view':
             zoom_level = 12
+            center_lat = 39.9042
+            center_lon = 116.4074
     
     # Create map figure
     map_fig = go.Figure()
     
-    # Add districts
-    for feature in geo_json['features']:
-        lons = [lon for lon, lat in feature['geometry']['coordinates'][0]]
-        lats = [lat for lon, lat in feature['geometry']['coordinates'][0]]
-        
-        map_fig.add_trace(go.Scattermap(
-            lon=lons + [lons[0]],  # Close the polygon
-            lat=lats + [lats[0]],
-            mode='lines',
-            line=dict(width=2, color='#3182ce'),
-            fill='toself',
-            fillcolor='rgba(49, 130, 206, 0.1)',
-            name=feature['properties']['name'],
-            hoverinfo='text',
-            text=feature['properties']['name']
-        ))
-    
-    # Add taxi markers if we have data
+    # Add taxi markers if we have data - Optimized for high performance
     taxi_data_snapshot = dict(taxi_data) if taxi_data else {}
 
     if taxi_data_snapshot:
+        # Debug: Print what taxis we have
+        print(f"Debug: Displaying {len(taxi_data_snapshot)} taxis")
+        
+        # Convert to DataFrame for efficient processing
         taxi_df = pd.DataFrame.from_dict(taxi_data_snapshot, orient='index').reset_index()
+        # Real-time data has 4 fields: taxi_id, lat, lng, speed, timestamp
         taxi_df.columns = ['taxi_id', 'lat', 'lng', 'speed', 'timestamp']
    
-        # Color markers by speed
-        taxi_df['color'] = taxi_df['speed'].apply(
-            lambda s: '#ff0000' if s > 60 else 
-                     '#ff8000' if s > 40 else 
-                     '#ffff00' if s > 20 else '#00ff00'
-        )
+        # Color markers by speed for better visualization
+        def get_speed_color(speed):
+            if speed > 80: return '#ff0000'      # Red - Very fast
+            elif speed > 60: return '#ff4500'   # Orange-red - Fast  
+            elif speed > 40: return '#ffa500'   # Orange - Medium-fast
+            elif speed > 20: return '#ffff00'   # Yellow - Medium
+            else: return '#00ff00'              # Green - Slow
         
-        # Add all taxis as markers
-        map_fig.add_trace(go.Scattermap(
+        taxi_df['color'] = taxi_df['speed'].apply(get_speed_color)
+        
+        # Use scatter plot for better performance with many points
+        map_fig.add_trace(go.Scattermapbox(
             lat=taxi_df['lat'],
             lon=taxi_df['lng'],
             mode='markers',
             marker=dict(
-                size=10,
+                size=12,  # Smaller size for better performance with many taxis
                 color=taxi_df['color'],
-                opacity=0.8
+                opacity=0.8,
+                symbol='circle',
+                allowoverlap=True
             ),
             customdata=taxi_df[['taxi_id', 'speed']],
             hovertemplate=(
-                "<b>Taxi %{customdata[0]}</b><br>" +
-                "Speed: %{customdata[1]:.0f} km/h<br>" +
+                "<b>Taxi %{customdata[0]}</b><br>"
+                "Speed: %{customdata[1]:.1f} km/h<br>"
                 "Location: %{lat:.4f}, %{lon:.4f}<extra></extra>"
             ),
-            name="All Taxis"
+            name="Taxis",
+            showlegend=False
         ))
         
-        # Highlight selected taxi if one is selected
+        # Highlight selected taxi with special marker
         if selected_taxi_id and selected_taxi_id in taxi_data_snapshot:
             selected_taxi = taxi_data_snapshot[selected_taxi_id]
-            map_fig.add_trace(go.Scattermap(
+            map_fig.add_trace(go.Scattermapbox(
                 lat=[selected_taxi['lat']],
                 lon=[selected_taxi['lng']],
                 mode='markers',
                 marker=dict(
                     size=20,
                     color='#0000ff',
-                    opacity=1
+                    opacity=1,
+                    symbol='star',
+                    allowoverlap=True
                 ),
                 customdata=[[selected_taxi_id, selected_taxi['speed']]],
                 hovertemplate=(
-                    "<b>Selected Taxi %{customdata[0]}</b><br>" +
-                    "Speed: %{customdata[1]:.0f} km/h<br>" +
+                    "<b>SELECTED: Taxi %{customdata[0]}</b><br>"
+                    "Speed: %{customdata[1]:.1f} km/h<br>"
                     "Location: %{lat:.4f}, %{lon:.4f}<extra></extra>"
                 ),
-                name="Selected Taxi"
+                name="Selected Taxi",
+                showlegend=False
             ))
             
             # Add route for selected taxi
@@ -443,20 +395,22 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
             if route:
                 route_lat = [p["latitude"] for p in route]
                 route_lon = [p["longitude"] for p in route]
-                map_fig.add_trace(go.Scattermap(
+                map_fig.add_trace(go.Scattermapbox(
                     lat=route_lat,
                     lon=route_lon,
                     mode="lines",
-                    line=dict(width=2, color='blue'),
+                    line=dict(width=3, color='rgba(0,0,255,0.6)'),
                     name="Route",
-                    hoverinfo='none'
+                    hoverinfo='none',
+                    showlegend=False
                 ))
 
-    # Update map layout
+    # Update map layout with Mapbox
     map_fig.update_layout(
-        map_style="open-street-map",
-        map=dict(
-            center=dict(lat=39.9042, lon=116.4074),
+        mapbox=dict(
+            accesstoken=MAPBOX_ACCESS_TOKEN,
+            style=MAPBOX_STYLE,
+            center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom_level
         ),
         margin={"r":0,"t":0,"l":0,"b":0},
@@ -466,34 +420,27 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     # Calculate statistics
     active_taxis = len(taxi_data_snapshot)
     violations = violations_today  # Use the total violations counter
-    
-    # Calculate average speed
-    avg_speed = 0
-    if taxi_data_snapshot:
-        speeds = [data['speed'] for data in taxi_data_snapshot.values()]
-        avg_speed = sum(speeds) / len(speeds) if speeds else 0
+    avg_speed = sum(data['speed'] for data in taxi_data_snapshot.values())/len(taxi_data_snapshot) if taxi_data_snapshot else 0
 
-    
     # Speed distribution chart
-    speed_bins = [0] * 5
+    speed_bins = [0]*5
     if taxi_data_snapshot:
         speeds = [data['speed'] for data in taxi_data_snapshot.values()]
-        speed_bins[0] = len([s for s in speeds if s < 20])
-        speed_bins[1] = len([s for s in speeds if 20 <= s < 40])
-        speed_bins[2] = len([s for s in speeds if 40 <= s < 60])
-        speed_bins[3] = len([s for s in speeds if 60 <= s < 80])
-        speed_bins[4] = len([s for s in speeds if s >= 80])
+        speed_bins = [
+            len([s for s in speeds if s < 20]),
+            len([s for s in speeds if 20 <= s < 40]),
+            len([s for s in speeds if 40 <= s < 60]),
+            len([s for s in speeds if 60 <= s < 80]),
+            len([s for s in speeds if s >= 80])
+        ]
     
-    speed_fig = go.Figure(
-        go.Bar(
-            x=['0-20', '20-40', '40-60', '60-80', '80+'],
-            y=speed_bins,
-            marker_color=['rgba(75, 192, 192, 0.6)', 'rgba(54, 162, 235, 0.6)', 
-                         'rgba(255, 206, 86, 0.6)', 'rgba(255, 159, 64, 0.6)', 
-                         'rgba(255, 99, 132, 0.6)']
-        )
-    )
-    
+    speed_fig = go.Figure(go.Bar(
+        x=['0-20', '20-40', '40-60', '60-80', '80+'],
+        y=speed_bins,
+        marker_color=['rgba(75, 192, 192, 0.6)', 'rgba(54, 162, 235, 0.6)', 
+                     'rgba(255, 206, 86, 0.6)', 'rgba(255, 159, 64, 0.6)', 
+                     'rgba(255, 99, 132, 0.6)']
+    ))
     speed_fig.update_layout(
         margin={"r":0,"t":0,"l":0,"b":0},
         yaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)'),
@@ -503,9 +450,8 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     
     # Create incident cards
     incident_cards = []
-    incidents_snapshot = list(incident_log)
-    if incidents_snapshot:
-        for incident in incidents_snapshot:
+    if incident_log:
+        for incident in list(incident_log):
             card = dbc.Card(
                 dbc.CardBody([
                     html.Div([
@@ -521,8 +467,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
                             html.P(f"Taxi {incident['taxi_id']} exceeded speed limit", className="mb-1 small"),
                             html.Div([
                                 html.Small(f"Speed: {incident['speed']:.0f} km/h", className="text-muted"),
-                                html.Small("•", className="mx-2 text-muted"),
-                                html.Small(f"Location: {incident['lat']:.4f}, {incident['lng']:.4f}", className="text-muted")
+                                html.Small(f"Location: {incident['lat']:.4f}, {incident['lng']:.4f}", className="text-muted ms-2")
                             ], className="d-flex")
                         ], className="flex-grow-1")
                     ], className="d-flex")
@@ -531,9 +476,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
             )
             incident_cards.append(card)
     else:
-        incident_cards = [
-            html.Div("No incidents reported", className="text-center text-muted py-4")
-        ]
+        incident_cards = html.Div("No incidents reported", className="text-center text-muted py-4")
     
     return (
         map_fig,
@@ -544,8 +487,6 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
         incident_cards
     )
 
-# Add this at the end of the `fetch_redis_data` function
-print("Taxi Data:", taxi_data)
 
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=8050)
