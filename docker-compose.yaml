@@ -32,9 +32,27 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 20  # Increased for better parallelism
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MESSAGE_MAX_BYTES: 10485760  
+      # Performance optimizations for high throughput
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+      KAFKA_LOG_RETENTION_HOURS: 24  # Reduce retention for large datasets
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824  # 1GB segments
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+      KAFKA_COMPRESSION_TYPE: 'snappy'  # Enable compression
+      KAFKA_BATCH_SIZE: 65536  # 64KB batch size
+      KAFKA_LINGER_MS: 10  # Batch messages for better throughput
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # Increased memory for better performance
+          cpus: "2.0"
 
   python-producer:
     build:
@@ -50,6 +68,11 @@ services:
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # Increased for parallel processing
+          cpus: "2.0"  # More CPU for parallel file processing
 
   redis:
     image: redis:latest
@@ -59,6 +82,13 @@ services:
     restart: unless-stopped
     networks:
       - taxi_network
+    # Redis optimization for high-throughput scenarios
+    command: redis-server --appendonly yes --appendfsync everysec --maxmemory 2gb --maxmemory-policy allkeys-lru --tcp-keepalive 60 --timeout 300
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # Dedicated memory for Redis
+          cpus: "1.0"
 
   dash-app:
     build:
@@ -76,7 +106,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 1G  # Increased for better performance
+          cpus: "1.0"  # More CPU allocation
   
   flink-jobmanager:
     image: flink:1.18.1-scala_2.12-java17
@@ -92,6 +123,10 @@ services:
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 20G
 
   
   flink-taskmanager:
@@ -103,10 +138,17 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 5  
+        taskmanager.numberOfTaskSlots: 20  # Increased for better parallelism
+        taskmanager.memory.process.size: 4gb  # More memory for processing
+        taskmanager.memory.managed.fraction: 0.4
     restart: unless-stopped
     networks:
       - taxi_network
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # Increased memory allocation
+          cpus: "2.0"  # More CPU power
 
 
 networks:

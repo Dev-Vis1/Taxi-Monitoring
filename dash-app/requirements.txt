@@ -1,4 +1,7 @@
+dash
 dash-bootstrap-components
+plotly
 geopy
 pandas
 redis
+pytz

@@ -35,6 +35,14 @@ public class MainJob {
     public static void main(String[] args) throws Exception {
 
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        
+        // OPTIMIZATION: Configure environment for high throughput
+        env.setParallelism(20);  // Increased parallelism
+        env.enableCheckpointing(30000);  // Checkpoint every 30 seconds
+        env.getConfig().setAutoWatermarkInterval(1000);  // More frequent watermarks
+        
+        // Configure for better performance with large datasets
+        env.getConfig().enableObjectReuse();  // Reuse objects for better performance
 
         var source = KafkaSource.<TaxiLocation>builder()
                 .setBootstrapServers("kafka:29092")
@@ -156,20 +164,25 @@ public class MainJob {
                 long t1 = parseTime(previous.getTimestamp());
                 long t2 = parseTime(current.getTimestamp());
 
-                if (t2 > t1) {
+                // Handle both forward and backward timestamps for academic project
+                // Calculate time difference as absolute value to handle out-of-order data
+                long timeDiff = Math.abs(t2 - t1);
+                
+                if (timeDiff > 0) {
                     double dist = Haversine.computeDistance(
                             previous.getLatitude(), previous.getLongitude(),
                             current.getLatitude(), current.getLongitude());
-                    double hours = (t2 - t1) / 3600000.0;
+                    double hours = timeDiff / 3600000.0;
                     if (hours > 0) {
                         double speed = dist / hours;
+                        // Cap speed at reasonable maximum (200 km/h) to avoid unrealistic values
+                        speed = Math.min(speed, 200.0);
                         out.collect(new TaxiSpeed(current.getTaxiId(), speed));
                     } else {
-                        log.warn("Zero or negative time interval for Taxi {}", current.getTaxiId());
+                        log.warn("Zero time interval for Taxi {}", current.getTaxiId());
                     }
                 } else {
-                    log.warn("Timestamps out of order for Taxi {}: current={}, previous={}", current.getTaxiId(), t2,
-                            t1);
+                    log.warn("Identical timestamps for Taxi {}: current={}, previous={}", current.getTaxiId(), t2, t1);
                 }
             }
 
