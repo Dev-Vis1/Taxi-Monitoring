@@ -132,15 +132,38 @@ def get_taxi_distance(taxi_id):
     return 0.0
 
 def get_all_taxi_distances():
-    """Get total distances for all taxis"""
+    """Get total distances for all CURRENTLY ACTIVE taxis only"""
     try:
+        # Get currently active taxi IDs (those with current location data)
+        current_taxi_ids = get_all_taxi_ids()
+        if not current_taxi_ids:
+            return 0.0
+        
+        # Get all distance data from Redis
         all_distances = r.hgetall("metrics:distance")
         total_distance = 0.0
+        active_distance_entries = 0
+        excluded_taxis = []
+        
         for taxi_id, distance_str in all_distances.items():
-            try:
-                total_distance += float(distance_str)
-            except (ValueError, TypeError):
-                continue
+            # Only include distance for currently active taxis
+            if taxi_id in current_taxi_ids:
+                try:
+                    distance = float(distance_str)
+                    total_distance += distance
+                    active_distance_entries += 1
+                except (ValueError, TypeError):
+                    continue
+            else:
+                excluded_taxis.append(taxi_id)
+        
+        if excluded_taxis:
+            logger.info(f"Excluded distance from inactive taxis: {excluded_taxis}")
+        
+        logger.info(f"Total distance calculation: {active_distance_entries} active taxis, "
+                   f"{len(all_distances)} total distance entries, "
+                   f"total distance: {total_distance:.2f} km")
+        
         return total_distance
     except Exception as e:
         logger.error(f"Error fetching all taxi distances: {e}")
@@ -428,3 +451,83 @@ def get_current_simulation_step():
         current_step = target_step
     
     return current_step
+
+def cleanup_stale_distance_data():
+    """Clean up distance data for taxis that are no longer active"""
+    try:
+        # Get currently active taxi IDs
+        current_taxi_ids = set(get_all_taxi_ids())
+        if not current_taxi_ids:
+            return 0
+        
+        # Get all distance entries
+        all_distance_entries = r.hgetall("metrics:distance")
+        stale_entries = []
+        
+        for taxi_id in all_distance_entries.keys():
+            if taxi_id not in current_taxi_ids:
+                stale_entries.append(taxi_id)
+        
+        # Remove stale entries
+        if stale_entries:
+            r.hdel("metrics:distance", *stale_entries)
+            logger.info(f"Cleaned up {len(stale_entries)} stale distance entries: {stale_entries}")
+        
+        return len(stale_entries)
+    except Exception as e:
+        logger.error(f"Error cleaning up stale distance data: {e}")
+        return 0
+
+def get_recently_active_taxi_ids(time_threshold_minutes=5):
+    """Get taxi IDs that have been updated recently (indicating current simulation activity)"""
+    try:
+        from datetime import datetime, timedelta
+        
+        current_time = datetime.now()
+        threshold_time = current_time - timedelta(minutes=time_threshold_minutes)
+        
+        # Get all taxi location keys
+        keys = []
+        cursor = 0
+        while True:
+            cursor, partial_keys = r.scan(cursor=cursor, match="location:*", count=10000)
+            keys.extend(partial_keys)
+            if cursor == 0:
+                break
+        
+        recent_taxi_ids = []
+        for key in keys:
+            if key.startswith("location:"):
+                taxi_id = key.split(":")[1]
+                # Get the timestamp for this taxi
+                taxi_data = r.hgetall(key)
+                if taxi_data and 'time' in taxi_data:
+                    try:
+                        # Parse the timestamp
+                        taxi_time_str = taxi_data['time']
+                        # Handle different timestamp formats
+                        try:
+                            taxi_time = datetime.strptime(taxi_time_str, '%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            try:
+                                taxi_time = datetime.strptime(taxi_time_str, '%H:%M:%S')
+                                # For time-only format, assume today's date
+                                taxi_time = current_time.replace(hour=taxi_time.hour, 
+                                                               minute=taxi_time.minute, 
+                                                               second=taxi_time.second)
+                            except ValueError:
+                                # Skip if we can't parse the timestamp
+                                continue
+                        
+                        # Check if it's recent (within threshold)
+                        if taxi_time >= threshold_time:
+                            recent_taxi_ids.append(taxi_id)
+                    except Exception:
+                        # Skip if we can't parse the timestamp
+                        continue
+        
+        logger.info(f"Found {len(recent_taxi_ids)} recently active taxis (last {time_threshold_minutes} minutes)")
+        return recent_taxi_ids
+    except Exception as e:
+        logger.error(f"Error fetching recently active taxi IDs: {e}")
+        return []

@@ -47,122 +47,29 @@ trajectory_update_interval = 1.0  # Update trajectories every second
 BLACKLISTED_TAXIS = set()  
 BLACKLISTED_INCIDENT_TYPES = set()
 
-# Area violation configuration (Beijing city center)
+# Area violation configuration (Beijing city center) - Matches Flink MainJob constants
 MONITORED_AREA = {
-    'center_lat': 39.9042,
-    'center_lon': 116.4074,
-    'warning_radius_km': 10.0,  # Warning when taxi approaches boundary
-    'max_radius_km': 15.0       # Violation when taxi exits this area
+    'center_lat': 39.9163,  # CENTER_LAT from your Flink MainJob.java
+    'center_lon': 116.3972,  # CENTER_LON from your Flink MainJob.java  
+    'warning_radius_km': 10.0,  # WARNING_RADIUS from your Flink MainJob.java
+    'max_radius_km': 15.0       # MAX_RADIUS from your Flink MainJob.java
 }
 
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """Calculate the great circle distance between two points on earth (in kilometers)"""
+def is_in_monitored_area(lat, lon):
+    """Check if coordinates are within the monitored area using the same logic as Flink"""
+    # Use a simple distance calculation for area checking (matches Flink MainJob logic)
     import math
     
-    # Convert decimal degrees to radians
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    # Convert to radians for calculation
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, MONITORED_AREA['center_lat'], MONITORED_AREA['center_lon']])
     
-    # Haversine formula
+    # Haversine formula (same as your Flink Haversine.java)
     dlat = lat2 - lat1
     dlon = lon2 - lon1
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
-    r = 6371  # Radius of earth in kilometers
-    return c * r
-
-def interpolate_position(pos1, pos2, timestamp1, timestamp2, current_time):
-    """
-    Interpolate position between two points based on time for smooth movement
-    Returns interpolated lat, lon based on current time
-    """
-    import datetime
+    distance = 6371.0 * c  # Same EARTH_RADIUS_KM as your Haversine.java
     
-    try:
-        # Parse timestamps
-        if isinstance(timestamp1, str):
-            t1 = datetime.datetime.strptime(timestamp1, '%H:%M:%S')
-            t1 = t1.timestamp()
-        else:
-            t1 = timestamp1
-            
-        if isinstance(timestamp2, str):
-            t2 = datetime.datetime.strptime(timestamp2, '%H:%M:%S')
-            t2 = t2.timestamp()
-        else:
-            t2 = timestamp2
-            
-        if isinstance(current_time, str):
-            ct = datetime.datetime.strptime(current_time, '%H:%M:%S')
-            ct = ct.timestamp()
-        else:
-            ct = current_time
-            
-        # Calculate interpolation factor
-        if t2 == t1:
-            factor = 0
-        else:
-            factor = (ct - t1) / (t2 - t1)
-            factor = max(0, min(1, factor))  # Clamp between 0 and 1
-        
-        # Interpolate coordinates
-        lat = pos1[0] + (pos2[0] - pos1[0]) * factor
-        lon = pos1[1] + (pos2[1] - pos1[1]) * factor
-        
-        return lat, lon
-    except:
-        # Fallback to current position if interpolation fails
-        return pos2[0], pos2[1]
-
-def update_taxi_trajectory(taxi_id, lat, lon, timestamp):
-    """Update taxi trajectory with new position for smooth movement"""
-    if taxi_id not in taxi_trajectories:
-        taxi_trajectories[taxi_id] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
-    
-    # Add new position with timestamp
-    taxi_trajectories[taxi_id].append({
-        'lat': lat,
-        'lon': lon,
-        'timestamp': timestamp,
-        'time_added': time.time()
-    })
-
-def get_smooth_taxi_position(taxi_id, current_time=None):
-    """
-    Get smooth interpolated position for a taxi based on its trajectory
-    This creates the Uber-like smooth movement effect
-    """
-    if taxi_id not in taxi_trajectories or len(taxi_trajectories[taxi_id]) < 2:
-        # Not enough data for interpolation, return last known position
-        if taxi_id in taxi_data:
-            return taxi_data[taxi_id]['lat'], taxi_data[taxi_id]['lng']
-        return None, None
-    
-    trajectory = list(taxi_trajectories[taxi_id])
-    
-    # Use the last two positions for interpolation
-    pos1 = trajectory[-2]
-    pos2 = trajectory[-1]
-    
-    if current_time is None:
-        current_time = time.time()
-    
-    # Convert to coordinates
-    coord1 = (pos1['lat'], pos1['lon'])
-    coord2 = (pos2['lat'], pos2['lon'])
-    
-    # Interpolate based on time
-    lat, lon = interpolate_position(
-        coord1, coord2, 
-        pos1.get('time_added', current_time), 
-        pos2.get('time_added', current_time), 
-        current_time
-    )
-    
-    return lat, lon
-
-def is_in_monitored_area(lat, lon):
-    """Check if coordinates are within the monitored area"""
-    distance = haversine_distance(lat, lon, MONITORED_AREA['center_lat'], MONITORED_AREA['center_lon'])
     return distance <= MONITORED_AREA['max_radius_km'], distance 
 
 def is_blacklisted_incident(incident):
@@ -338,7 +245,27 @@ app.layout = dbc.Container(fluid=True, children=[
                             dbc.Button(html.I(className="fas fa-search-plus"), id="zoom-in", color="light"),
                             dbc.Button(html.I(className="fas fa-search-minus"), id="zoom-out", color="light"),
                             dbc.Button(html.I(className="fas fa-crosshairs"), id="reset-view", color="light"),
+                            dbc.Button([html.I(className="fas fa-route me-1"), "Trajectories"], 
+                                     id="toggle-trajectory", color="info", outline=True),
                         ], className="me-2"),
+                        html.Div([
+                            html.Label("Show Taxis:", className="text-muted small me-2"),
+                            dcc.Dropdown(
+                                id="taxi-limit",
+                                options=[
+                                    {"label": "All", "value": -1},
+                                    {"label": "5", "value": 5},
+                                    {"label": "10", "value": 10},
+                                    {"label": "15", "value": 15},
+                                    {"label": "20", "value": 20},
+                                    {"label": "30", "value": 30},
+                                    {"label": "50", "value": 50}
+                                ],
+                                value=-1,
+                                style={"width": "80px", "minWidth": "80px"},
+                                clearable=False
+                            )
+                        ], className="d-flex align-items-center me-3"),
                         dcc.Dropdown(
                             id="taxi-id",
                             options=[{"label": tid, "value": tid} for tid in get_all_taxi_ids()],
@@ -481,6 +408,9 @@ app.layout = dbc.Container(fluid=True, children=[
 
     # Interval for updates - Real-time 2-second updates for smooth taxi movement
     dcc.Interval(id='update-interval', interval=5000, n_intervals=0),  # 2-second updates for smooth movement
+    
+    # Hidden div to store trajectory toggle state
+    html.Div(id='trajectory-state', children='false', style={'display': 'none'}),
 ])
 
 # CSS styles
@@ -525,6 +455,26 @@ def update_time(n):
     now = datetime.now(tz)
     return now.strftime('%Y-%m-%d %H:%M:%S')
 
+# Trajectory toggle callback
+@app.callback(
+    [Output('trajectory-state', 'children'),
+     Output('toggle-trajectory', 'color'),
+     Output('toggle-trajectory', 'outline')],
+    [Input('toggle-trajectory', 'n_clicks')],
+    [State('trajectory-state', 'children')]
+)
+def toggle_trajectory_display(n_clicks, current_state):
+    if n_clicks is None:
+        return 'false', 'info', True  # Default: trajectories off, outlined button
+    
+    # Toggle the state
+    new_state = 'true' if current_state == 'false' else 'false'
+    
+    if new_state == 'true':
+        return 'true', 'info', False  # Trajectories on, solid button
+    else:
+        return 'false', 'info', True  # Trajectories off, outlined button
+
 @app.callback(
     [Output('taxi-map', 'figure'),
      Output('active-taxis', 'children'),
@@ -538,11 +488,13 @@ def update_time(n):
      Input('zoom-in', 'n_clicks'),
      Input('zoom-out', 'n_clicks'),
      Input('reset-view', 'n_clicks'),
-     Input('taxi-id', 'value')],
+     Input('taxi-id', 'value'),
+     Input('trajectory-state', 'children'),
+     Input('taxi-limit', 'value')],
     [State('taxi-map', 'relayoutData'),
      State('taxi-map', 'figure')]
 )
-def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayout_data, current_figure):
+def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_trajectories, taxi_limit, relayout_data, current_figure):
     global violations_today, area_violations_today, total_distance_covered
     ctx = dash.callback_context
     
@@ -579,29 +531,46 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     
     # Optimized data snapshot - avoid deep copy for performance
     taxi_data_snapshot = taxi_data.copy() if taxi_data else {}
+    
+    # Apply taxi limit if specified
+    if taxi_limit > 0 and len(taxi_data_snapshot) > taxi_limit:
+        # Sort taxis by ID for consistent selection and keep the first N taxis
+        sorted_taxi_ids = sorted(taxi_data_snapshot.keys())
+        limited_taxi_ids = sorted_taxi_ids[:taxi_limit]
+        
+        # Always include the selected taxi if it exists, even if it's outside the limit
+        if selected_taxi_id and selected_taxi_id in taxi_data_snapshot and selected_taxi_id not in limited_taxi_ids:
+            # Remove the last taxi from the limit and add the selected one
+            limited_taxi_ids = limited_taxi_ids[:-1] + [selected_taxi_id]
+        
+        taxi_data_snapshot = {tid: taxi_data_snapshot[tid] for tid in limited_taxi_ids}
+        print(f"Debug: Limited display to {len(taxi_data_snapshot)} out of {len(taxi_data)} total taxis")
 
     if taxi_data_snapshot:
         # Debug: Print what taxis we have
         print(f"Debug: Displaying {len(taxi_data_snapshot)} taxis with smooth trajectories")
         
         # ENHANCED VISUALIZATION with trajectory lines and interpolated positions
-        # First, add trajectory lines for each taxi to show movement paths
-        for taxi_id, trajectory in taxi_trajectories.items():
-            if len(trajectory) > 1:
-                # Draw trajectory line for this taxi
-                lats = [pos['lat'] for pos in trajectory]
-                lons = [pos['lon'] for pos in trajectory]
-                
-                # Add trajectory line
-                map_fig.add_trace(go.Scattermapbox(
-                    lat=lats,
-                    lon=lons,
-                    mode='lines',
-                    line=dict(width=3, color='rgba(86, 13, 175, 0.8)'),
-                    hoverinfo='none',
-                    showlegend=False,
-                    name=f"Trajectory {taxi_id}"
-                ))
+        # Only show trajectory lines if enabled
+        if show_trajectories == 'true':
+            # First, add trajectory lines for each taxi to show movement paths
+            # Only show trajectories for taxis that are currently being displayed
+            for taxi_id, trajectory in taxi_trajectories.items():
+                if taxi_id in taxi_data_snapshot and len(trajectory) > 1:
+                    # Draw trajectory line for this taxi
+                    lats = [pos['lat'] for pos in trajectory]
+                    lons = [pos['lon'] for pos in trajectory]
+                    
+                    # Add trajectory line
+                    map_fig.add_trace(go.Scattermapbox(
+                        lat=lats,
+                        lon=lons,
+                        mode='lines',
+                        line=dict(width=3, color='rgba(86, 13, 175, 0.8)'),
+                        hoverinfo='none',
+                        showlegend=False,
+                        name=f"Trajectory {taxi_id}"
+                    ))
         
         # Convert to DataFrame for efficient processing with smooth positions
         taxi_positions = []
@@ -757,7 +726,15 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     )
     
     # Optimized statistics calculation
-    active_taxis = len(taxi_data_snapshot)
+    total_active_taxis = len(taxi_data) if taxi_data else 0
+    displayed_taxis = len(taxi_data_snapshot)
+    
+    # Show both total and displayed count if limited
+    if taxi_limit > 0 and total_active_taxis > taxi_limit:
+        active_taxis_display = f"{displayed_taxis}/{total_active_taxis}"
+    else:
+        active_taxis_display = total_active_taxis
+    
     speed_violations = violations_today
     area_violations = area_violations_today
     total_distance = total_distance_covered
@@ -765,7 +742,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     # Calculate average speed more efficiently
     if taxi_data_snapshot:
         total_speed = sum(data['speed'] for data in taxi_data_snapshot.values())
-        avg_speed = total_speed / active_taxis
+        avg_speed = total_speed / displayed_taxis
     else:
         avg_speed = 0
 
@@ -825,23 +802,27 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
             card = dbc.Card(
                 dbc.CardBody([
                     html.Div([
+                        # Centered Icon
                         html.Div(
-                            html.I(className=icon_class),
-                            className=f"{icon_bg} bg-opacity-10 p-2 rounded-circle me-3"
+                            html.I(className=icon_class, style={"fontSize": "1.5rem"}),
+                            className=f"{icon_bg} bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center shadow-sm",
+                            style={"width": "48px", "height": "48px", "margin": "0 auto"}
                         ),
+                        # Incident Details
                         html.Div([
                             html.Div([
-                                html.Strong(incident['type'], className="text-danger" if incident['type'] == 'Speed Violation' else "text-warning"),
-                                html.Small(incident['timestamp'], className="text-muted ms-2")
-                            ], className="d-flex justify-content-between"),
-                            html.P(incident_text, className="mb-1 small"),
-                            html.Div([
-                                html.Small(location_text, className="text-muted")
-                            ], className="d-flex")
-                        ], className="flex-grow-1")
-                    ], className="d-flex")
+                                html.Strong(incident['type'],
+                                            className="text-danger" if incident['type'] == 'Speed Violation'
+                                            else "text-warning" if incident['type'] == 'Area Violation'
+                                            else "text-primary"),
+                                html.Small(incident['timestamp'], className="text-muted ms-2 fw-light")
+                            ], className="d-flex justify-content-between align-items-center mb-1"),
+                            html.P(incident_text, className="mb-1 small fw-semibold", style={"color": "#333"}),
+                            html.Small(location_text, className="text-muted fst-italic")
+                        ], className="flex-grow-1 ms-3")
+                    ], className="d-flex align-items-center"),
                 ], className="p-2"),
-                className="mb-2 incident-card"
+                className="mb-2 incident-card border-0 shadow-sm"
             )
             incident_cards.append(card)
     else:
@@ -850,11 +831,11 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
     # Performance logging
     processing_time = time.time() - start_time
     if processing_time > 1.0:  # Log slow updates
-        print(f"Dashboard update took {processing_time:.2f}s for {active_taxis} taxis")
+        print(f"Dashboard update took {processing_time:.2f}s for {displayed_taxis} displayed / {total_active_taxis} total taxis")
     
     return (
         map_fig,
-        active_taxis,
+        active_taxis_display,
         speed_violations,
         area_violations,
         f"{total_distance:.1f} km",
@@ -863,6 +844,95 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
         incident_cards
     )
 
+def interpolate_position(pos1, pos2, timestamp1, timestamp2, current_time):
+    """
+    Interpolate position between two points based on time for smooth movement
+    Returns interpolated lat, lon based on current time
+    """
+    import datetime
+    
+    try:
+        # Parse timestamps
+        if isinstance(timestamp1, str):
+            t1 = datetime.datetime.strptime(timestamp1, '%H:%M:%S')
+            t1 = t1.timestamp()
+        else:
+            t1 = timestamp1
+            
+        if isinstance(timestamp2, str):
+            t2 = datetime.datetime.strptime(timestamp2, '%H:%M:%S')
+            t2 = t2.timestamp()
+        else:
+            t2 = timestamp2
+            
+        if isinstance(current_time, str):
+            ct = datetime.datetime.strptime(current_time, '%H:%M:%S')
+            ct = ct.timestamp()
+        else:
+            ct = current_time
+            
+        # Calculate interpolation factor
+        if t2 == t1:
+            factor = 0
+        else:
+            factor = (ct - t1) / (t2 - t1)
+            factor = max(0, min(1, factor))  # Clamp between 0 and 1
+        
+        # Interpolate coordinates
+        lat = pos1[0] + (pos2[0] - pos1[0]) * factor
+        lon = pos1[1] + (pos2[1] - pos1[1]) * factor
+        
+        return lat, lon
+    except:
+        # Fallback to current position if interpolation fails
+        return pos2[0], pos2[1]
+
+def update_taxi_trajectory(taxi_id, lat, lon, timestamp):
+    """Update taxi trajectory with new position for smooth movement"""
+    if taxi_id not in taxi_trajectories:
+        taxi_trajectories[taxi_id] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
+    
+    # Add new position with timestamp
+    taxi_trajectories[taxi_id].append({
+        'lat': lat,
+        'lon': lon,
+        'timestamp': timestamp,
+        'time_added': time.time()
+    })
+
+def get_smooth_taxi_position(taxi_id, current_time=None):
+    """
+    Get smooth interpolated position for a taxi based on its trajectory
+    This creates the Uber-like smooth movement effect
+    """
+    if taxi_id not in taxi_trajectories or len(taxi_trajectories[taxi_id]) < 2:
+        # Not enough data for interpolation, return last known position
+        if taxi_id in taxi_data:
+            return taxi_data[taxi_id]['lat'], taxi_data[taxi_id]['lng']
+        return None, None
+    
+    trajectory = list(taxi_trajectories[taxi_id])
+    
+    # Use the last two positions for interpolation
+    pos1 = trajectory[-2]
+    pos2 = trajectory[-1]
+    
+    if current_time is None:
+        current_time = time.time()
+    
+    # Convert to coordinates
+    coord1 = (pos1['lat'], pos1['lon'])
+    coord2 = (pos2['lat'], pos2['lon'])
+    
+    # Interpolate based on time
+    lat, lon = interpolate_position(
+        coord1, coord2, 
+        pos1.get('time_added', current_time), 
+        pos2.get('time_added', current_time), 
+        current_time
+    )
+    
+    return lat, lon
 
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=8050)
