@@ -92,4 +92,52 @@ HGETALL location:6211
 ```
 
 ---
+## 🖥️ 5. AWS EC2: Commands ( Amazon Linux 2; EOL:2026-06-30)
 
+### 🔑 Connect to EC2 Instance
+```bash
+ssh -i <key.pem> ec2-user@<ec2-public-dns>
+```
+
+### 🛠️ Update Server & Install Essentials
+
+#### Update package lists and upgrade
+```bash
+sudo yum update -y
+```
+
+#### Install Docker
+```bash
+sudo amazon-linux-extras install docker -y
+sudo service docker start
+sudo usermod -aG docker ec2-user
+```
+
+#### Install Docker Compose
+```bash
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+docker-compose --version
+```
+
+#### Install Git
+```bash
+sudo yum install git -y
+```
+
+#### Install OpenJDK 17
+```bash
+sudo yum install java-17-amazon-corretto -y
+java -version
+```
+
+#### (Optional) Install Maven
+```bash
+sudo yum install maven -y
+mvn -version
+```
+
+### 🐳 Prune Unused Docker Resources
+```bash
+docker system prune -af
+```
