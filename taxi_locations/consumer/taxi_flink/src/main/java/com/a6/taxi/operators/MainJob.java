@@ -15,12 +15,14 @@ import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsIni
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.time.Duration;
 
 public class MainJob {
 
@@ -36,7 +38,7 @@ public class MainJob {
 
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         
-        // OPTIMIZATION: Configure environment for high throughput
+        // OPTIMIZATION: Configure environment for high throughput with event time
         env.setParallelism(20);  // Increased parallelism
         env.enableCheckpointing(30000);  // Checkpoint every 30 seconds
         env.getConfig().setAutoWatermarkInterval(1000);  // More frequent watermarks
@@ -52,7 +54,22 @@ public class MainJob {
                 .setValueOnlyDeserializer(new TaxiLocationDeserializer())
                 .build();
 
-        var locationStream = env.fromSource(source, WatermarkStrategy.noWatermarks(), "Kafka Source");
+        // REAL-TIME EVENT TIME PROCESSING: Configure watermarks for ordered processing
+        // Use bounded out-of-orderness with 10 seconds tolerance for taxi data
+        var locationStream = env.fromSource(source, 
+            WatermarkStrategy.<TaxiLocation>forBoundedOutOfOrderness(Duration.ofSeconds(10))
+                .withTimestampAssigner((element, recordTimestamp) -> {
+                    try {
+                        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                        return sdf.parse(element.getTimestamp()).getTime();
+                    } catch (ParseException e) {
+                        // Fallback to processing time if timestamp parsing fails
+                        log.warn("Failed to parse timestamp for taxi {}: {}", element.getTaxiId(), element.getTimestamp());
+                        return System.currentTimeMillis();
+                    }
+                })
+                .withIdleness(Duration.ofMinutes(1)), // Handle idle sources
+            "Kafka Source");
 
         var speedStream = locationStream
                 .keyBy(TaxiLocation::getTaxiId)
@@ -70,7 +87,7 @@ public class MainJob {
 
         zoneExitAlerts.addSink(logSink("Zone Alert"));
 
-        speedStream.addSink(new SinkFunction<>() {
+        speedStream.addSink(new SinkFunction<TaxiSpeed>() {
             @Override
             public void invoke(TaxiSpeed value, Context context) {
                 System.out.printf("Taxi %s speed: %.2f km/h%n", value.getTaxiId(), value.getSpeed());
@@ -81,7 +98,7 @@ public class MainJob {
                 .keyBy(TaxiSpeed::getTaxiId)
                 .process(new AverageSpeedCalculator());
 
-        avgSpeedStream.addSink(new SinkFunction<>() {
+        avgSpeedStream.addSink(new SinkFunction<TaxiAverageSpeed>() {
             @Override
             public void invoke(TaxiAverageSpeed value, Context context) {
                 System.out.printf("Taxi %s average speed: %.2f km/h%n", value.getTaxiId(), value.getAverageSpeed());
@@ -94,7 +111,7 @@ public class MainJob {
                 .keyBy(TaxiLocation::getTaxiId)
                 .process(new DistanceTracker());
 
-        distanceStream.addSink(new SinkFunction<>() {
+        distanceStream.addSink(new SinkFunction<TaxiDistance>() {
             @Override
             public void invoke(TaxiDistance value, Context context) {
                 System.out.printf("Taxi %s total distance: %.2f km%n", value.getTaxiId(), value.getDistance());
@@ -114,7 +131,7 @@ public class MainJob {
     }
 
     private static SinkFunction<String> logSink(String label) {
-        return new SinkFunction<>() {
+        return new SinkFunction<String>() {
             @Override
             public void invoke(String message, Context context) {
                 log.info("{}: {}", label, message);

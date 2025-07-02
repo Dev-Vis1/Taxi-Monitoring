@@ -19,9 +19,9 @@ public class RedisSink<T> extends RichSinkFunction<T> {
 
     private transient JedisPool jedisPool;
     private transient List<T> buffer;
-    private static final int BATCH_SIZE = 100; // Batch operations for better performance
+    private static final int BATCH_SIZE = 100;  // Batch operations for better performance
     private long lastFlushTime = 0;
-    private static final long FLUSH_INTERVAL = 1000; // Flush every 1 second
+    private static final long FLUSH_INTERVAL = 1000;  // Flush every 1 second
 
     @Override
     public void open(Configuration parameters) {
@@ -33,7 +33,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
         config.setTestOnBorrow(true);
         config.setTestOnReturn(true);
         config.setTestWhileIdle(true);
-
+        
         jedisPool = new JedisPool(config, "redis", 6379, 10000);
         buffer = new ArrayList<>();
         lastFlushTime = System.currentTimeMillis();
@@ -52,21 +52,20 @@ public class RedisSink<T> extends RichSinkFunction<T> {
     @Override
     public void invoke(T input, Context context) {
         buffer.add(input);
-
+        
         // Flush buffer if it's full or if enough time has passed
-        if (buffer.size() >= BATCH_SIZE ||
-                (System.currentTimeMillis() - lastFlushTime) > FLUSH_INTERVAL) {
+        if (buffer.size() >= BATCH_SIZE || 
+            (System.currentTimeMillis() - lastFlushTime) > FLUSH_INTERVAL) {
             flushBuffer();
         }
     }
-
+    
     private void flushBuffer() {
-        if (buffer.isEmpty())
-            return;
-
+        if (buffer.isEmpty()) return;
+        
         try (Jedis jedis = jedisPool.getResource()) {
             Pipeline pipeline = jedis.pipelined();
-
+            
             for (T input : buffer) {
                 if (input instanceof TaxiSpeed) {
                     TaxiSpeed speed = (TaxiSpeed) input;
@@ -83,19 +82,36 @@ public class RedisSink<T> extends RichSinkFunction<T> {
                 } else if (input instanceof TaxiLocation) {
                     TaxiLocation location = (TaxiLocation) input;
                     String locationKey = "location:" + location.getTaxiId();
+                    String trajectoryKey = "trajectory:" + location.getTaxiId();
+                    
+                    // Store current location
                     pipeline.hset(locationKey, "lat", String.valueOf(location.getLatitude()));
                     pipeline.hset(locationKey, "lon", String.valueOf(location.getLongitude()));
                     pipeline.hset(locationKey, "time", location.getTimestamp());
+                    
+                    // Store trajectory for smooth movement (keep last 10 positions)
+                    String trajectoryPoint = String.format(
+                        "{\"lat\":%.6f,\"lon\":%.6f,\"time\":\"%s\",\"timestamp\":%d}",
+                        location.getLatitude(),
+                        location.getLongitude(), 
+                        location.getTimestamp(),
+                        System.currentTimeMillis()
+                    );
+                    pipeline.lpush(trajectoryKey, trajectoryPoint);
+                    pipeline.ltrim(trajectoryKey, 0, 9);  // Keep only last 10 positions
+                    
+                    // Add taxi to active set for Dash app to discover
+                    pipeline.sadd("taxi:active", location.getTaxiId());
 
                 } else if (input instanceof String) {
                     pipeline.lpush("taxi:logs", (String) input);
                 }
             }
-
-            pipeline.sync(); // Execute all commands
+            
+            pipeline.sync();  // Execute all commands
             buffer.clear();
             lastFlushTime = System.currentTimeMillis();
-
+            
         } catch (Exception e) {
             System.err.println("Error flushing Redis buffer: " + e.getMessage());
         }
