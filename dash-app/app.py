@@ -258,6 +258,7 @@ app.layout = dbc.Container(fluid=True, children=[
             ], className="mb-4"),
 
             # Stats cards
+            # Stats cards - Modified to move "Total Distance" to secondary row and "Avg. Speed" to primary row
             dbc.Row([
                 dbc.Col(dbc.Card([
                     dbc.CardBody([
@@ -267,7 +268,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H3(id="active-taxis", children="0", className="mb-0")
                             ]),
                             html.Div(html.I(className="fas fa-taxi fa-2x text-primary"),
-                                   className="bg-primary bg-opacity-10 p-3 rounded-circle")
+                                className="bg-primary bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=3),
@@ -279,7 +280,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H3(id="violations-today", children="0", className="mb-0")
                             ]),
                             html.Div(html.I(className="fas fa-exclamation-triangle fa-2x text-danger"),
-                                   className="bg-danger bg-opacity-10 p-3 rounded-circle")
+                                className="bg-danger bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=3),
@@ -291,26 +292,10 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H3(id="area-violations", children="0", className="mb-0")
                             ]),
                             html.Div(html.I(className="fas fa-map-marked-alt fa-2x text-warning"),
-                                   className="bg-warning bg-opacity-10 p-3 rounded-circle")
+                                className="bg-warning bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=3),
-                dbc.Col(dbc.Card([
-                    dbc.CardBody([
-                        html.Div([
-                            html.Div([
-                                html.P("Total Distance", className="text-muted small mb-1"),
-                                html.H3(id="total-distance", children="0 km", className="mb-0")
-                            ]),
-                            html.Div(html.I(className="fas fa-route fa-2x text-info"),
-                                   className="bg-info bg-opacity-10 p-3 rounded-circle")
-                        ], className="d-flex justify-content-between align-items-center")
-                    ])
-                ]), md=3)
-            ], className="mb-4"),
-            
-            # Secondary stats row
-            dbc.Row([
                 dbc.Col(dbc.Card([
                     dbc.CardBody([
                         html.Div([
@@ -319,7 +304,23 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H3(id="avg-speed", children="0 km/h", className="mb-0")
                             ]),
                             html.Div(html.I(className="fas fa-tachometer-alt fa-2x text-success"),
-                                   className="bg-success bg-opacity-10 p-3 rounded-circle")
+                                className="bg-success bg-opacity-10 p-3 rounded-circle")
+                        ], className="d-flex justify-content-between align-items-center")
+                    ])
+                ]), md=3)
+            ], className="mb-4"),
+
+            # Secondary stats row - Now with "Total Distance" in first position
+            dbc.Row([
+                dbc.Col(dbc.Card([
+                    dbc.CardBody([
+                        html.Div([
+                            html.Div([
+                                html.P("Total Distance", className="text-muted small mb-1"),
+                                html.H3(id="total-distance", children="0 km", className="mb-0")
+                            ]),
+                            html.Div(html.I(className="fas fa-route fa-2x text-info"),
+                                className="bg-info bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=4),
@@ -331,7 +332,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H4(f"±{MONITORED_AREA['max_radius_km']} km", className="mb-0")
                             ]),
                             html.Div(html.I(className="fas fa-circle-notch fa-2x text-secondary"),
-                                   className="bg-secondary bg-opacity-10 p-3 rounded-circle")
+                                className="bg-secondary bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=4),
@@ -343,7 +344,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                 html.H4("ONLINE", className="mb-0 text-success")
                             ]),
                             html.Div(html.I(className="fas fa-check-circle fa-2x text-success"),
-                                   className="bg-success bg-opacity-10 p-3 rounded-circle")
+                                className="bg-success bg-opacity-10 p-3 rounded-circle")
                         ], className="d-flex justify-content-between align-items-center")
                     ])
                 ]), md=4)
@@ -692,7 +693,9 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
                     html.Div([
                         html.Div(
                             html.I(className=icon_class),
-                            className=f"{icon_bg} bg-opacity-10 p-2 rounded-circle me-3"
+                             className=f"{icon_bg} bg-opacity-10 p-2 rounded-circle d-flex align-items-center justify-content-center",
+                             style={"width": "40px", "height": "40px"}
+                             
                         ),
                         html.Div([
                             html.Div([
