@@ -525,10 +525,10 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
             lon=taxi_df['lng'],
             mode='markers',
             marker=dict(
-                size=6,  # Smaller markers for better performance with many taxis
+                size=18,  # Smaller markers for better performance with many taxis
                 color=taxi_df['color'],
-                opacity=0.6,  # More transparent for better layering
-                symbol='circle',
+                opacity=0.8,  # More transparent for better layering
+                symbol='car',
                 allowoverlap=True,
                 sizemode='diameter'  # More efficient sizing
             ),
