@@ -52,17 +52,20 @@ def get_all_taxi_ids():
     return taxi_ids_cache
 
 def get_latest_location(taxi_id):
-    """Get latest location with enhanced error handling and speed integration"""
+    """Get latest location with enhanced error handling and trajectory support"""
     key = f"location:{taxi_id}"
     try:
         # Use pipeline for multiple operations
         pipe = r.pipeline()
         pipe.hgetall(key)
         pipe.hget("metrics:speed", taxi_id)
+        # Also get recent trajectory points
+        pipe.lrange(f"trajectory:{taxi_id}", 0, 4)  # Get last 5 positions
         results = pipe.execute()
         
         data = results[0]
         speed_data = results[1]
+        trajectory_data = results[2]
         
         if data and "lat" in data and "lon" in data:
             # Parse speed safely
@@ -73,13 +76,26 @@ def get_latest_location(taxi_id):
                 except (ValueError, TypeError):
                     speed = 0.0
             
+            # Parse trajectory for smooth movement
+            trajectory = []
+            if trajectory_data:
+                for traj_point in trajectory_data:
+                    try:
+                        import json
+                        trajectory.append(json.loads(traj_point))
+                    except:
+                        continue
+            
             # FIXED: Redis stores lat/lon correctly, don't swap them
-            return {
+            location_data = {
                 "latitude": float(data["lat"]),   # lat is latitude
                 "longitude": float(data["lon"]),  # lon is longitude  
                 "timestamp": data.get("time", ""),
-                "speed": speed
+                "speed": speed,
+                "trajectory": trajectory  # Add trajectory for smooth movement
             }
+            
+            return location_data
     except Exception as e:
         logger.error(f"Error fetching location for taxi {taxi_id}: {e}")
     

@@ -23,7 +23,7 @@ server = app.server
 
 # Mapbox Configuration (REPLACE WITH YOUR TOKEN)
 MAPBOX_ACCESS_TOKEN = "pk.eyJ1Ijoic3VubWVldDU1IiwiYSI6ImNtY2ozMjBrMzA0dGkyaXNhM3Q0b3c1Z2IifQ.GPtW45RgkjnbsaGc2GOA3w"  # Get from mapbox.com
-MAPBOX_STYLE = "streets"  # Other options: "light", "dark", "outdoors", "satellite"
+MAPBOX_STYLE = "outdoors"  # Other options: "light", "dark", "outdoors", "satellite"
 
 # Redis Configuration
 REDIS_HOST = 'redis'
@@ -37,6 +37,11 @@ total_distance_covered = 0.0  # New: Track total distance covered by all taxis
 
 taxi_data = {}
 incident_log = deque(maxlen=20)
+
+# REAL-TIME TRAJECTORY TRACKING - For smooth Uber-like movement
+taxi_trajectories = {}  # Store recent positions for each taxi
+MAX_TRAJECTORY_LENGTH = 10  # Keep last 10 positions for smooth interpolation
+trajectory_update_interval = 1.0  # Update trajectories every second
 
 # Blacklist for taxi IDs or incident types
 BLACKLISTED_TAXIS = set()  
@@ -64,6 +69,96 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.asin(math.sqrt(a))
     r = 6371  # Radius of earth in kilometers
     return c * r
+
+def interpolate_position(pos1, pos2, timestamp1, timestamp2, current_time):
+    """
+    Interpolate position between two points based on time for smooth movement
+    Returns interpolated lat, lon based on current time
+    """
+    import datetime
+    
+    try:
+        # Parse timestamps
+        if isinstance(timestamp1, str):
+            t1 = datetime.datetime.strptime(timestamp1, '%H:%M:%S')
+            t1 = t1.timestamp()
+        else:
+            t1 = timestamp1
+            
+        if isinstance(timestamp2, str):
+            t2 = datetime.datetime.strptime(timestamp2, '%H:%M:%S')
+            t2 = t2.timestamp()
+        else:
+            t2 = timestamp2
+            
+        if isinstance(current_time, str):
+            ct = datetime.datetime.strptime(current_time, '%H:%M:%S')
+            ct = ct.timestamp()
+        else:
+            ct = current_time
+            
+        # Calculate interpolation factor
+        if t2 == t1:
+            factor = 0
+        else:
+            factor = (ct - t1) / (t2 - t1)
+            factor = max(0, min(1, factor))  # Clamp between 0 and 1
+        
+        # Interpolate coordinates
+        lat = pos1[0] + (pos2[0] - pos1[0]) * factor
+        lon = pos1[1] + (pos2[1] - pos1[1]) * factor
+        
+        return lat, lon
+    except:
+        # Fallback to current position if interpolation fails
+        return pos2[0], pos2[1]
+
+def update_taxi_trajectory(taxi_id, lat, lon, timestamp):
+    """Update taxi trajectory with new position for smooth movement"""
+    if taxi_id not in taxi_trajectories:
+        taxi_trajectories[taxi_id] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
+    
+    # Add new position with timestamp
+    taxi_trajectories[taxi_id].append({
+        'lat': lat,
+        'lon': lon,
+        'timestamp': timestamp,
+        'time_added': time.time()
+    })
+
+def get_smooth_taxi_position(taxi_id, current_time=None):
+    """
+    Get smooth interpolated position for a taxi based on its trajectory
+    This creates the Uber-like smooth movement effect
+    """
+    if taxi_id not in taxi_trajectories or len(taxi_trajectories[taxi_id]) < 2:
+        # Not enough data for interpolation, return last known position
+        if taxi_id in taxi_data:
+            return taxi_data[taxi_id]['lat'], taxi_data[taxi_id]['lng']
+        return None, None
+    
+    trajectory = list(taxi_trajectories[taxi_id])
+    
+    # Use the last two positions for interpolation
+    pos1 = trajectory[-2]
+    pos2 = trajectory[-1]
+    
+    if current_time is None:
+        current_time = time.time()
+    
+    # Convert to coordinates
+    coord1 = (pos1['lat'], pos1['lon'])
+    coord2 = (pos2['lat'], pos2['lon'])
+    
+    # Interpolate based on time
+    lat, lon = interpolate_position(
+        coord1, coord2, 
+        pos1.get('time_added', current_time), 
+        pos2.get('time_added', current_time), 
+        current_time
+    )
+    
+    return lat, lon
 
 def is_in_monitored_area(lat, lon):
     """Check if coordinates are within the monitored area"""
@@ -131,6 +226,9 @@ def fetch_simulation_data():
                         current_lat = location["latitude"]
                         current_lon = location["longitude"]
                         
+                        # UPDATE TRAJECTORY for smooth movement
+                        update_taxi_trajectory(taxi_id, current_lat, current_lon, location["timestamp"])
+                        
                         new_taxi_data[taxi_id] = {
                             'lat': current_lat,
                             'lng': current_lon,
@@ -192,7 +290,7 @@ def fetch_simulation_data():
                 print(f"Speed violations: {violations_today}, Area violations: {area_violations_today}")
                 last_performance_log = time.time()
             
-            time.sleep(3)  # Optimized sleep time
+            time.sleep(1.5)  # Faster updates for smoother movement
         except Exception as e:
             print(f"Real-time data error: {e}")
             import traceback
@@ -381,8 +479,8 @@ app.layout = dbc.Container(fluid=True, children=[
         className="mt-4 py-3"
     ),
 
-    # Interval for updates - HIGHLY OPTIMIZED for better performance
-    dcc.Interval(id='update-interval', interval=15000, n_intervals=0),  # Increased to 15 seconds for better performance
+    # Interval for updates - Real-time 2-second updates for smooth taxi movement
+    dcc.Interval(id='update-interval', interval=5000, n_intervals=0),  # 2-second updates for smooth movement
 ])
 
 # CSS styles
@@ -484,87 +582,124 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, relayou
 
     if taxi_data_snapshot:
         # Debug: Print what taxis we have
-        print(f"Debug: Displaying {len(taxi_data_snapshot)} taxis")
+        print(f"Debug: Displaying {len(taxi_data_snapshot)} taxis with smooth trajectories")
         
-        # Convert to DataFrame for efficient processing - NO ARTIFICIAL CAP
-        taxi_df = pd.DataFrame.from_dict(taxi_data_snapshot, orient='index').reset_index()
-        # Real-time data has 4 fields: taxi_id, lat, lng, speed, timestamp
-        taxi_df.columns = ['taxi_id', 'lat', 'lng', 'speed', 'timestamp']
+        # ENHANCED VISUALIZATION with trajectory lines and interpolated positions
+        # First, add trajectory lines for each taxi to show movement paths
+        for taxi_id, trajectory in taxi_trajectories.items():
+            if len(trajectory) > 1:
+                # Draw trajectory line for this taxi
+                lats = [pos['lat'] for pos in trajectory]
+                lons = [pos['lon'] for pos in trajectory]
+                
+                # Add trajectory line
+                map_fig.add_trace(go.Scattermapbox(
+                    lat=lats,
+                    lon=lons,
+                    mode='lines',
+                    line=dict(width=3, color='rgba(86, 13, 175, 0.8)'),
+                    hoverinfo='none',
+                    showlegend=False,
+                    name=f"Trajectory {taxi_id}"
+                ))
         
-        # Optimize by filtering out invalid data points
-        taxi_df = taxi_df.dropna(subset=['lat', 'lng'])
-        taxi_df = taxi_df[(taxi_df['lat'] != 0) & (taxi_df['lng'] != 0)]
+        # Convert to DataFrame for efficient processing with smooth positions
+        taxi_positions = []
+        current_time = time.time()
+        
+        for taxi_id, data in taxi_data_snapshot.items():
+            # Get smooth interpolated position
+            smooth_lat, smooth_lon = get_smooth_taxi_position(taxi_id, current_time)
+            if smooth_lat is not None and smooth_lon is not None:
+                taxi_positions.append({
+                    'taxi_id': taxi_id,
+                    'lat': smooth_lat,
+                    'lng': smooth_lon,
+                    'speed': data['speed'],
+                    'timestamp': data['timestamp']
+                })
+        
+        if taxi_positions:
+            taxi_df = pd.DataFrame(taxi_positions)
+            
+            # Optimize by filtering out invalid data points
+            taxi_df = taxi_df.dropna(subset=['lat', 'lng'])
+            taxi_df = taxi_df[(taxi_df['lat'] != 0) & (taxi_df['lng'] != 0)]
    
-        # Color markers by speed and area status for better visualization
-        def get_speed_color(speed):
-            if speed > 80: return '#ff0000'      # Red - Very fast
-            elif speed > 60: return '#ff4500'   # Orange-red - Fast  
-            elif speed > 40: return '#ffa500'   # Orange - Medium-fast
-            elif speed > 20: return '#ffff00'   # Yellow - Medium
-            else: return '#00ff00'              # Green - Slow
-        
-        def get_area_status_color(lat, lng):
-            """Get color based on area status"""
-            is_in_area, distance = is_in_monitored_area(lat, lng)
-            if not is_in_area:
-                return '#ff0000'  # Red - Outside area
-            elif distance > MONITORED_AREA['warning_radius_km']:
-                return '#ffa500'  # Orange - Near boundary
-            else:
-                return None  # Use speed color
-        
-        # Apply colors based on area status first, then speed
-        taxi_df['area_color'] = taxi_df.apply(lambda row: get_area_status_color(row['lat'], row['lng']), axis=1)
-        taxi_df['speed_color'] = taxi_df['speed'].apply(get_speed_color)
-        taxi_df['color'] = taxi_df['area_color'].fillna(taxi_df['speed_color'])
-        
-        # Use highly optimized scatter plot for better performance with many points
-        map_fig.add_trace(go.Scattermapbox(
-            lat=taxi_df['lat'],
-            lon=taxi_df['lng'],
-            mode='markers',
-            marker=dict(
-                size=6,  # Smaller markers for better performance with many taxis
-                color=taxi_df['color'],
-                opacity=0.6,  # More transparent for better layering
-                symbol='circle',
-                allowoverlap=True,
-                sizemode='diameter'  # More efficient sizing
-            ),
-            customdata=taxi_df[['taxi_id', 'speed']],
-            hovertemplate=(
-                "<b>Taxi %{customdata[0]}</b><br>"
-                "Speed: %{customdata[1]:.1f} km/h<br>"
-                "Location: %{lat:.4f}, %{lon:.4f}<extra></extra>"
-            ),
-            name="Taxis",
-            showlegend=False,
-            text=None,  # Remove text for better performance
-            hoverinfo='text'  # Optimize hover info
-        ))
-        
-        # Highlight selected taxi with special marker
-        if selected_taxi_id and selected_taxi_id in taxi_data_snapshot:
-            selected_taxi = taxi_data_snapshot[selected_taxi_id]
+            # Color markers by speed and area status for better visualization
+            def get_speed_color(speed):
+                if speed > 80: return '#ff0000'      # Red - Very fast
+                elif speed > 60: return '#ff4500'   # Orange-red - Fast  
+                elif speed > 40: return '#ffa500'   # Orange - Medium-fast
+                elif speed > 20: return '#ffff00'   # Yellow - Medium
+                else: return '#00ff00'              # Green - Slow
+            
+            def get_area_status_color(lat, lng):
+                """Get color based on area status"""
+                is_in_area, distance = is_in_monitored_area(lat, lng)
+                if not is_in_area:
+                    return '#ff0000'  # Red - Outside area
+                elif distance > MONITORED_AREA['warning_radius_km']:
+                    return '#ffa500'  # Orange - Near boundary
+                else:
+                    return None  # Use speed color
+            
+            # Apply colors based on area status first, then speed
+            taxi_df['area_color'] = taxi_df.apply(lambda row: get_area_status_color(row['lat'], row['lng']), axis=1)
+            taxi_df['speed_color'] = taxi_df['speed'].apply(get_speed_color)
+            taxi_df['color'] = taxi_df['area_color'].fillna(taxi_df['speed_color'])
+            
+            # ENHANCED TAXI MARKERS with smooth movement animation
             map_fig.add_trace(go.Scattermapbox(
-                lat=[selected_taxi['lat']],
-                lon=[selected_taxi['lng']],
+                lat=taxi_df['lat'],
+                lon=taxi_df['lng'],
                 mode='markers',
                 marker=dict(
-                    size=20,
-                    color='#0000ff',
-                    opacity=1,
-                    symbol='star',
-                    allowoverlap=True
+                    size=20,  # Slightly larger for better visibility
+                    color=taxi_df['color'],
+                    opacity=1,  # More opaque for better visibility
+                    symbol='car',
+                    allowoverlap=True,
+                    sizemode='diameter'
                 ),
-                customdata=[[selected_taxi_id, selected_taxi['speed']]],
+                customdata=taxi_df[['taxi_id', 'speed']],
                 hovertemplate=(
-                    "<b>SELECTED: Taxi %{customdata[0]}</b><br>"
+                    "<b>Taxi %{customdata[0]}</b><br>"
                     "Speed: %{customdata[1]:.1f} km/h<br>"
-                    "Location: %{lat:.4f}, %{lon:.4f}<extra></extra>"
+                    "Location: %{lat:.4f}, %{lon:.4f}<br>"
+                    "<i>Smooth interpolated position</i><extra></extra>"
                 ),
-                name="Selected Taxi",
-                showlegend=False                ))
+                name="Taxis with Trajectories",
+                showlegend=False,
+                hoverinfo='text'
+            ))
+        
+        # Highlight selected taxi with special marker  
+        if selected_taxi_id and selected_taxi_id in taxi_data_snapshot:
+            # Get smooth position for selected taxi too
+            selected_lat, selected_lon = get_smooth_taxi_position(selected_taxi_id, current_time)
+            if selected_lat is not None and selected_lon is not None:
+                selected_taxi = taxi_data_snapshot[selected_taxi_id]
+                map_fig.add_trace(go.Scattermapbox(
+                    lat=[selected_lat],
+                    lon=[selected_lon],
+                    mode='markers',
+                    marker=dict(
+                        size=20,
+                        color='#0000ff',
+                        opacity=1,
+                        symbol='star',
+                        allowoverlap=True
+                    ),
+                    customdata=[[selected_taxi_id, selected_taxi['speed']]],
+                    hovertemplate=(
+                        "<b>SELECTED: Taxi %{customdata[0]}</b><br>"
+                        "Speed: %{customdata[1]:.1f} km/h<br>"
+                        "Smooth Location: %{lat:.4f}, %{lon:.4f}<extra></extra>"
+                    ),
+                    name="Selected Taxi",
+                    showlegend=False
+                ))
             
             # Add route for selected taxi
             route = get_route(selected_taxi_id)
