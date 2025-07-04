@@ -225,10 +225,11 @@ public class MainJob {
                 long now = System.currentTimeMillis();
                 long timestampMs = timestamp.getTime();
                 
-                // Check if timestamp is reasonable (not too far in future or too old)
-                if (timestampMs > now + 3600000 || now - timestampMs > 86400000L * 365) {
+                // Check if timestamp is reasonable (not too far in future, allow historical data)
+                if (timestampMs > now + 3600000) {  // Only reject future timestamps
                     return false;
                 }
+                // Remove the old data check to allow historical taxi data (2008)
             } catch (ParseException e) {
                 return false;
             }
