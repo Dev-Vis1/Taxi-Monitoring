@@ -1,6 +1,7 @@
 # redis_client.py - OPTIMIZED FOR HIGH THROUGHPUT
 import redis
 import json
+import msgpack
 from datetime import datetime, timedelta
 import time
 import logging
@@ -9,9 +10,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Simplified Redis connection - fix the connection pool issue
-r = redis.Redis(host='redis', port=6379, db=0, decode_responses=True,
-                socket_timeout=10, socket_connect_timeout=10)
+# Optimized Redis connection with connection pool
+pool = redis.ConnectionPool(
+    host='redis', 
+    port=6379, 
+    db=0, 
+    max_connections=50,
+    decode_responses=True,
+    socket_timeout=10, 
+    socket_connect_timeout=10
+)
+r = redis.Redis(connection_pool=pool)
 
 # Simulation state - Optimized for real-time streaming
 simulation_start_time = None
@@ -26,28 +35,20 @@ taxi_ids_cache_time = 0
 cache_expiry = 60  # Reduced to 1 minute for more frequent updates
 
 def get_all_taxi_ids():
-    """Get all taxi IDs with highly optimized caching and batch processing"""
+    """Get all taxi IDs using Redis SMEMBERS for better performance"""
     global taxi_ids_cache, taxi_ids_cache_time
     
     current_time = time.time()
     if taxi_ids_cache is None or (current_time - taxi_ids_cache_time) > cache_expiry:
         try:
-            # Use SCAN with larger COUNT for better performance with many keys
-            keys = []
-            cursor = 0
-            while True:
-                cursor, partial_keys = r.scan(cursor=cursor, match="location:*", count=10000)
-                keys.extend(partial_keys)
-                if cursor == 0:
-                    break
-            
-            taxi_ids = [key.split(":")[1] for key in keys if key.startswith("location:")]
-            taxi_ids_cache = taxi_ids
+            # Use Redis set for active taxis - much faster than scanning keys
+            taxi_ids_cache = list(r.smembers('taxi:active'))
             taxi_ids_cache_time = current_time
-            logger.info(f"Refreshed taxi IDs cache: {len(taxi_ids)} taxis")
+            logger.info(f"Refreshed taxi cache: {len(taxi_ids_cache)} active taxis")
         except Exception as e:
             logger.error(f"Error fetching taxi IDs: {e}")
-            return taxi_ids_cache or []
+            if taxi_ids_cache is None:
+                taxi_ids_cache = []
     
     return taxi_ids_cache
 
@@ -531,3 +532,87 @@ def get_recently_active_taxi_ids(time_threshold_minutes=5):
     except Exception as e:
         logger.error(f"Error fetching recently active taxi IDs: {e}")
         return []
+
+def get_batch_locations(taxi_ids, batch_size=200):
+    """Get locations for multiple taxis using Redis pipeline for better performance"""
+    results = {}
+    
+    # Process in batches to avoid memory issues
+    for i in range(0, len(taxi_ids), batch_size):
+        batch_taxi_ids = taxi_ids[i:i + batch_size]
+        
+        # Use pipeline for batch operations
+        pipe = r.pipeline()
+        for taxi_id in batch_taxi_ids:
+            pipe.hmget(f"location:{taxi_id}", ["lat", "lon", "time"])
+            pipe.hget("metrics:speed", taxi_id)
+            pipe.get(f"last_violation:{taxi_id}")  # For duplicate check
+        
+        try:
+            pipe_results = pipe.execute()
+            
+            # Process results in groups of 3 (location, speed, violation)
+            for j in range(0, len(pipe_results), 3):
+                taxi_idx = j // 3
+                if taxi_idx < len(batch_taxi_ids):
+                    taxi_id = batch_taxi_ids[taxi_idx]
+                    location_data = pipe_results[j]
+                    speed_data = pipe_results[j + 1]
+                    last_violation = pipe_results[j + 2]
+                    
+                    if location_data and location_data[0] and location_data[1]:
+                        try:
+                            results[taxi_id] = {
+                                'latitude': float(location_data[0]),
+                                'longitude': float(location_data[1]),
+                                'timestamp': location_data[2] or '',
+                                'speed': float(speed_data) if speed_data else 0.0,
+                                'last_violation': last_violation
+                            }
+                        except (ValueError, TypeError):
+                            continue
+        except Exception as e:
+            logger.error(f"Error in batch location fetch: {e}")
+            continue
+    
+    return results
+
+def check_area_violations_bulk(taxi_locations):
+    """Check area violations for multiple taxis using Redis GEO operations"""
+    try:
+        # Use Redis GEORADIUS for efficient area checking
+        in_area_taxis = r.georadius(
+            'taxi_coords', 
+            MONITORED_AREA['center_lon'],
+            MONITORED_AREA['center_lat'],
+            MONITORED_AREA['max_radius_km'],
+            'km',
+            withdist=True
+        )
+        
+        # Convert to set for fast lookup
+        in_area_set = {taxi_id for taxi_id, _ in in_area_taxis}
+        
+        violations = []
+        for taxi_id, location in taxi_locations.items():
+            if taxi_id not in in_area_set:
+                violations.append({
+                    'taxi_id': taxi_id,
+                    'type': 'Area Violation',
+                    'lat': location['latitude'],
+                    'lng': location['longitude'],
+                    'timestamp': location['timestamp']
+                })
+        
+        return violations
+    except Exception as e:
+        logger.error(f"Error checking area violations: {e}")
+        return []
+
+# Add constants for monitored area (matching Flink configuration)
+MONITORED_AREA = {
+    'center_lat': 39.9163,
+    'center_lon': 116.3972,
+    'warning_radius_km': 10.0,
+    'max_radius_km': 15.0
+}

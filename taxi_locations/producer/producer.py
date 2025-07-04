@@ -17,9 +17,12 @@ logger = logging.getLogger(__name__)
 kafka_config = {
     'bootstrap.servers': 'kafka:29092',
     'client.id': 'taxi-data-producer',
-    'acks': '1',
-    'compression.type': 'snappy',
-    'retries': '3'
+    'acks': '0',  # Fire-and-forget for higher throughput
+    'compression.type': 'lz4',  # Better compression than snappy
+    'batch.num.messages': 100000,
+    'queue.buffering.max.ms': 100,
+    'message.max.bytes': 10000000,
+    'socket.keepalive.enable': True
 }
 producer = Producer(kafka_config)
 
@@ -53,30 +56,28 @@ def load_taxi_data_parallel(pattern, batch_size=500, max_workers=4):
         yield combined_data
 
 def process_single_file(file_path):
-    """Process a single file and return its data with deduplication and temporal ordering"""
     try:
         taxi_id = os.path.splitext(os.path.basename(file_path))[0]
-        # Use more efficient CSV reading
-        df = pd.read_csv(file_path, header=None, names=['taxi_id_file', 'timestamp', 'longitude', 'latitude'])
+        chunks = []
+        for chunk in pd.read_csv(file_path, 
+                                header=None,
+                                names=['taxi_id_file', 'timestamp', 'longitude', 'latitude'],
+                                chunksize=5000):
+            chunk = chunk.drop_duplicates()
+            chunk = chunk[(chunk['latitude'] != 0) & (chunk['longitude'] != 0)]
+            chunk = chunk.dropna()
+            chunks.append(chunk)
+        
+        if not chunks:
+            return []
+            
+        df = pd.concat(chunks)
+        # Add final deduplication across chunks
+        df = df.drop_duplicates(subset=['timestamp', 'longitude', 'latitude'])
         df['taxi_id'] = taxi_id
-        
-        # DEDUPLICATION: Remove duplicate entries (same taxi_id, timestamp, location)
-        df = df.drop_duplicates(subset=['taxi_id', 'timestamp', 'longitude', 'latitude'], keep='first')
-        
-        # TEMPORAL ORDERING: Sort by timestamp within each taxi
-        df = df.sort_values('timestamp')
-        
-        # ADDITIONAL CLEANING: Remove entries with invalid coordinates
-        df = df[(df['latitude'] != 0) & (df['longitude'] != 0)]
-        df = df.dropna(subset=['latitude', 'longitude', 'timestamp'])
-        
-        # Convert to dict efficiently
-        data = df[['timestamp', 'latitude', 'longitude', 'taxi_id']].to_dict(orient='records')
-        
-        logger.info(f"Processed {file_path}: {len(data)} records after deduplication and cleaning")
-        return data
+        return df[['timestamp', 'latitude', 'longitude', 'taxi_id']].to_dict(orient='records')
     except Exception as e:
-        logger.error(f"Error processing file {file_path}: {e}")
+        logger.error(f"Error processing {file_path}: {e}")
         return []
 
 # Sort data by timestamp
@@ -355,26 +356,35 @@ def send_to_kafka_every_2_seconds(data, topic, update_interval=2.0):
 
 
 def main():
-    input_pattern = 'data/*.txt'
+    input_pattern = '/app/data/*.txt'  # Fixed path for Docker container
     kafka_topic = 'taxi-locations'
     
-    logger.info("Starting REAL-TIME taxi data producer with 2-second updates")
+    # Check if data directory exists
+    data_dir = '/app/data'
+    if not os.path.exists(data_dir):
+        logger.error(f"Data directory {data_dir} does not exist!")
+        return
+    
+    # List available files
+    all_files = glob.glob(input_pattern)
+    logger.info(f"Found {len(all_files)} data files in {data_dir}")
+    if len(all_files) == 0:
+        logger.error("No data files found! Check the data directory.")
+        return
+    
+    logger.info("Starting streaming producer with DIRECT FILE STREAMING")
     start_time = time.time()
     
-    # Load all data first
-    all_data = []
-    total_records = 0
-    for data_batch in load_taxi_data_parallel(input_pattern):
-        all_data.extend(data_batch)
-        total_records += len(data_batch)
-    
-    logger.info(f"Loaded {total_records} total records from {input_pattern}")
-    
-    # Use 2-second interval streaming for smooth visualization
-    send_to_kafka_every_2_seconds(all_data, kafka_topic, update_interval=2.0)
+    # Stream files directly without loading all into memory
+    for data_batch in load_taxi_data_parallel(input_pattern, batch_size=200, max_workers=8):
+        send_to_kafka_temporal_streaming(
+            data_batch, 
+            kafka_topic,
+            speed_multiplier=600  # Faster processing
+        )
     
     end_time = time.time()
-    logger.info(f"Real-time producer completed in {end_time - start_time:.2f} seconds")
+    logger.info(f"Producer completed in {end_time - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
