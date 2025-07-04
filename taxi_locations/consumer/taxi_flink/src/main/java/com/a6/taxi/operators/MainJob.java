@@ -35,11 +35,8 @@ public class MainJob {
     // Define side outputs for different alert types
     private static final OutputTag<String> SPEED_ALERTS = new OutputTag<String>("speed-alerts") {};
     private static final OutputTag<String> ZONE_ALERTS = new OutputTag<String>("zone-alerts") {};
-<<<<<<< HEAD
     private static final OutputTag<String> ZONE_EXIT_ALERTS = new OutputTag<String>("zone-exit-alerts") {};
     private static final OutputTag<String> VALIDATION_ALERTS = new OutputTag<String>("validation-alerts") {};
-=======
->>>>>>> main
 
     // Constants
     private static final double CENTER_LAT = 39.9163;
@@ -48,7 +45,6 @@ public class MainJob {
     // Legacy constants (kept for backward compatibility)
     private static final double MAX_RADIUS = 15.0;
     private static final double MAX_SPEED_KMH = 50.0;
-<<<<<<< HEAD
     private static final long STATE_TTL_HOURS = 6;
     
     // Data validation thresholds
@@ -67,10 +63,6 @@ public class MainJob {
     private static final double MAX_LAT = 40.4;
     private static final double MIN_LON = 115.8;
     private static final double MAX_LON = 117.4;
-=======
-    private static final double MAX_REASONABLE_SPEED = 200.0; // km/h
-    private static final long STATE_TTL_HOURS = 6;
->>>>>>> main
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
@@ -111,17 +103,12 @@ public class MainJob {
             .withIdleness(Duration.ofMinutes(5));  // Longer idleness timeout
 
         // Main stream
-<<<<<<< HEAD
         DataStream<TaxiLocation> rawLocationStream = env.fromSource(
-=======
-        DataStream<TaxiLocation> locationStream = env.fromSource(
->>>>>>> main
             source, 
             watermarkStrategy,
             "Kafka Source"
         );
 
-<<<<<<< HEAD
         // LOCATION FILTERING ====================================================
         // Filter out taxis that are outside the 15km radius with stateful tracking
         SingleOutputStreamOperator<TaxiLocation> locationStream = rawLocationStream
@@ -187,53 +174,6 @@ public class MainJob {
         avgSpeedStream.addSink(new RedisSink<>()).name("AvgSpeedRedisSink");
         distanceStream.addSink(new RedisSink<>()).name("DistanceRedisSink");
 
-=======
-        // SPEED CALCULATION =====================================================
-        SingleOutputStreamOperator<TaxiSpeed> speedStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new SpeedCalculator())
-            .name("SpeedCalculator")
-            .uid("speed-calculator");
-
-        // SPEED ALERTS ==========================================================
-        DataStream<String> speedAlerts = speedStream
-            .getSideOutput(SPEED_ALERTS);
-        
-        speedAlerts.addSink(new LogSink("SPEED ALERT"));
-        
-        // ZONE EXIT ALERTS ======================================================
-        SingleOutputStreamOperator<TaxiLocation> zoneStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new ZoneExitNotifier())
-            .name("ZoneExitNotifier")
-            .uid("zone-notifier");
-        
-        DataStream<String> zoneAlerts = zoneStream
-            .getSideOutput(ZONE_ALERTS);
-        
-        zoneAlerts.addSink(new LogSink("ZONE ALERT"));
-        
-        // AVERAGE SPEED =========================================================
-        SingleOutputStreamOperator<TaxiAverageSpeed> avgSpeedStream = speedStream
-            .keyBy(TaxiSpeed::getTaxiId)
-            .process(new AverageSpeedCalculator())
-            .name("AverageSpeedCalculator")
-            .uid("avg-speed-calculator");
-        
-        // DISTANCE TRACKING =====================================================
-        SingleOutputStreamOperator<TaxiDistance> distanceStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new DistanceTracker())
-            .name("DistanceTracker")
-            .uid("distance-tracker");
-        
-        // REDIS SINK CONNECTIONS ================================================
-        locationStream.addSink(new RedisSink<>()).name("LocationRedisSink");
-        speedStream.addSink(new RedisSink<>()).name("SpeedRedisSink");
-        avgSpeedStream.addSink(new RedisSink<>()).name("AvgSpeedRedisSink");
-        distanceStream.addSink(new RedisSink<>()).name("DistanceRedisSink");
-
->>>>>>> main
         env.execute("Optimized Taxi Monitoring");
     }
 
@@ -247,7 +187,6 @@ public class MainJob {
         }
     }
 
-<<<<<<< HEAD
     // Data Validation Utilities =================================================
     private static class DataValidator {
         
@@ -264,30 +203,6 @@ public class MainJob {
             if (Double.isNaN(lat) || Double.isNaN(lon) || 
                 Double.isInfinite(lat) || Double.isInfinite(lon)) {
                 return false;
-=======
-    // Zone Exit Notifier ========================================================
-    public static class ZoneExitNotifier 
-        extends KeyedProcessFunction<String, TaxiLocation, TaxiLocation> {
-        
-        @Override
-        public void processElement(
-            TaxiLocation location, 
-            Context context, 
-            Collector<TaxiLocation> out
-        ) {
-            out.collect(location);
-            
-            double distance = Haversine.computeDistance(
-                CENTER_LAT, CENTER_LON, 
-                location.getLatitude(), location.getLongitude()
-            );
-            
-            if (distance > WARNING_RADIUS && distance <= MAX_RADIUS) {
-                context.output(ZONE_ALERTS,
-                    "⚠️ Taxi " + location.getTaxiId() + 
-                    " exiting zone. Distance: " + String.format("%.2f", distance) + " km"
-                );
->>>>>>> main
             }
             
             // Check if within valid lat/lon ranges
@@ -367,33 +282,20 @@ public class MainJob {
         }
     }
 
-<<<<<<< HEAD
     // Zone Filter ===============================================================
     public static class ZoneFilter 
         extends KeyedProcessFunction<String, TaxiLocation, TaxiLocation> {
         
         private transient ValueState<Boolean> isInZone;
-=======
-    // Speed Calculator ==========================================================
-    public static class SpeedCalculator 
-        extends KeyedProcessFunction<String, TaxiLocation, TaxiSpeed> {
-        
-        private transient ValueState<TaxiLocation> previousLocation;
->>>>>>> main
         private final StateTtlConfig ttlConfig = StateTtlConfig
             .newBuilder(Time.hours(STATE_TTL_HOURS))
             .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
             .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
-<<<<<<< HEAD
             .cleanupInRocksdbCompactFilter(1000)
-=======
-            .cleanupInRocksdbCompactFilter(1000)  // Enable RocksDB compaction filter
->>>>>>> main
             .build();
 
         @Override
         public void open(Configuration config) {
-<<<<<<< HEAD
             ValueStateDescriptor<Boolean> descriptor = new ValueStateDescriptor<>(
                 "isInZone", 
                 Boolean.class
@@ -495,8 +397,6 @@ public class MainJob {
 
         @Override
         public void open(Configuration config) {
-=======
->>>>>>> main
             ValueStateDescriptor<TaxiLocation> desc = new ValueStateDescriptor<>(
                 "lastLocation", 
                 TypeInformation.of(new TypeHint<TaxiLocation>() {})
@@ -516,7 +416,6 @@ public class MainJob {
 
             if (previous == null) return;
 
-<<<<<<< HEAD
             // VALIDATION STEP 2: Time gap validation
             if (!DataValidator.validateTimeGap(previous.getTimestamp(), current.getTimestamp())) {
                 context.output(SPEED_ALERTS, 
@@ -562,29 +461,6 @@ public class MainJob {
             if (speed > MAX_TAXI_SPEED) {
                 log.debug("Capped speed for taxi {}: {:.2f} km/h", current.getTaxiId(), speed);
                 speed = MAX_TAXI_SPEED;
-=======
-            long t1 = FastDateFormat.parse(previous.getTimestamp());
-            long t2 = FastDateFormat.parse(current.getTimestamp());
-            long timeDiff = Math.abs(t2 - t1);
-
-            if (timeDiff == 0) {
-                log.debug("Zero time difference for taxi {}", current.getTaxiId());
-                return;
-            }
-
-            double dist = Haversine.computeDistance(
-                previous.getLatitude(), previous.getLongitude(),
-                current.getLatitude(), current.getLongitude()
-            );
-            
-            double hours = timeDiff / 3600000.0;
-            double speed = dist / hours;
-
-            // Validate and cap speed
-            if (speed > MAX_REASONABLE_SPEED) {
-                log.debug("Capped speed for taxi {}: {:.2f} km/h", current.getTaxiId(), speed);
-                speed = MAX_REASONABLE_SPEED;
->>>>>>> main
             }
             
             TaxiSpeed speedData = new TaxiSpeed(current.getTaxiId(), speed);
@@ -629,7 +505,6 @@ public class MainJob {
             Context context, 
             Collector<TaxiAverageSpeed> out
         ) throws Exception {
-<<<<<<< HEAD
             
             // VALIDATION STEP 5: Speed input validation (additional check)
             if (!DataValidator.validateSpeed(speed.getSpeed())) {
@@ -639,8 +514,6 @@ public class MainJob {
                 return;
             }
             
-=======
->>>>>>> main
             Tuple2<Integer, Double> current = speedStats.value();
             if (current == null) {
                 current = Tuple2.of(0, 0.0);
@@ -650,7 +523,6 @@ public class MainJob {
             double total = current.f1 + speed.getSpeed();
             double avg = total / count;
 
-<<<<<<< HEAD
             // VALIDATION STEP 6: Average speed validation
             if (Double.isNaN(avg) || avg > MAX_REALISTIC_AVG_SPEED) {
                 if (Double.isNaN(avg)) {
@@ -666,15 +538,6 @@ public class MainJob {
 
             out.collect(new TaxiAverageSpeed(speed.getTaxiId(), avg));
             speedStats.update(Tuple2.of(count, total));
-=======
-            if (!Double.isNaN(avg)) {
-                out.collect(new TaxiAverageSpeed(speed.getTaxiId(), avg));
-                speedStats.update(Tuple2.of(count, total));
-            } else {
-                log.warn("NaN in average speed for taxi {}", speed.getTaxiId());
-                speedStats.clear();
-            }
->>>>>>> main
         }
     }
 
@@ -727,7 +590,6 @@ public class MainJob {
                     previous.getLatitude(), previous.getLongitude(),
                     current.getLatitude(), current.getLongitude()
                 );
-<<<<<<< HEAD
                 
                 // VALIDATION STEP 7: Segment distance validation (additional check)
                 if (!DataValidator.validateSegmentDistance(segment)) {
@@ -754,11 +616,6 @@ public class MainJob {
                 return;
             }
 
-=======
-                totalDistance += segment;
-            }
-
->>>>>>> main
             accumulatedDistance.update(totalDistance);
             out.collect(new TaxiDistance(current.getTaxiId(), totalDistance));
         }
