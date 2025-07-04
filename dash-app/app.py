@@ -8,7 +8,7 @@ import redis
 from threading import Thread
 from collections import deque
 import time
-from redis_client import get_all_taxi_ids, get_latest_location, get_route, get_all_taxi_distances
+from redis_client import get_all_taxi_ids, get_latest_location, get_route, get_all_taxi_distances, get_batch_locations, check_area_violations_bulk
 import pytz
 
 # Initialize the Dash app
@@ -116,68 +116,58 @@ def fetch_simulation_data():
             all_taxi_ids = taxi_ids_cache
             print(f"Using {len(all_taxi_ids)} taxi IDs from cache")
             
-            # Clear old data and get current real-time positions
-            new_taxi_data = {}
+            # OPTIMIZED BATCH PROCESSING - Get all locations in bulk
+            print("Fetching locations in bulk...")
+            bulk_locations = get_batch_locations(all_taxi_ids, batch_size=500)
             
-            # Process taxis in optimized batches
-            batch_size = 200  # Increased batch size for better efficiency
+            # Clear old data and process bulk results
+            new_taxi_data = {}
             processed_count = 0
             
-            for i in range(0, len(all_taxi_ids), batch_size):
-                batch_taxi_ids = all_taxi_ids[i:i + batch_size]
-                
-                for taxi_id in batch_taxi_ids:
-                    # Get current location from Redis
-                    location = get_latest_location(taxi_id)
-                    if location and location["latitude"] != 0 and location["longitude"] != 0:
-                        current_lat = location["latitude"]
-                        current_lon = location["longitude"]
-                        
-                        # UPDATE TRAJECTORY for smooth movement
-                        update_taxi_trajectory(taxi_id, current_lat, current_lon, location["timestamp"])
-                        
-                        new_taxi_data[taxi_id] = {
-                            'lat': current_lat,
-                            'lng': current_lon,
-                            'speed': location["speed"],
-                            'timestamp': location["timestamp"] if location["timestamp"] else datetime.now(tz).strftime('%H:%M:%S')
-                        }
-                        processed_count += 1
-                        
-                        # Check for area violations
-                        is_in_area, distance_from_center = is_in_monitored_area(current_lat, current_lon)
-                        if not is_in_area:
-                            incident = {
-                                'taxi_id': taxi_id,
-                                'type': 'Area Violation',
-                                'distance_from_center': distance_from_center,
-                                'lat': current_lat,
-                                'lng': current_lon,
-                                'timestamp': datetime.now(tz).strftime('%H:%M:%S')
-                            }
-                            # Check if this area violation is already logged recently
-                            if not any(i['taxi_id'] == taxi_id and i['type'] == 'Area Violation' 
-                                     for i in list(incident_log)[:5]):
-                                incident_log.appendleft(incident)
-                                area_violations_today += 1
-                        
-                        # Optimized speed violation detection (only check high speeds)
-                        speed = location["speed"]
-                        if speed > 60:  # Only process potential violations
-                            incident = {
-                                'taxi_id': taxi_id,
-                                'type': 'Speed Violation',
-                                'speed': speed,
-                                'lat': current_lat,
-                                'lng': current_lon,
-                                'timestamp': datetime.now(tz).strftime('%H:%M:%S')
-                            }
-                            # Quick blacklist check and duplicate prevention
-                            if (not is_blacklisted_incident(incident) and 
-                                not any(i['taxi_id'] == taxi_id and i['type'] == 'Speed Violation' 
-                                       for i in list(incident_log)[:3])):  # Check only last 3
-                                incident_log.appendleft(incident)
-                                violations_today += 1
+            # Process all locations from bulk fetch
+            for taxi_id, location in bulk_locations.items():
+                if location["latitude"] != 0 and location["longitude"] != 0:
+                    current_lat = location["latitude"]
+                    current_lon = location["longitude"]
+                    
+                    # UPDATE TRAJECTORY for smooth movement
+                    update_taxi_trajectory(taxi_id, current_lat, current_lon, location["timestamp"])
+                    
+                    new_taxi_data[taxi_id] = {
+                        'lat': current_lat,
+                        'lng': current_lon,
+                        'speed': location["speed"],
+                        'timestamp': location["timestamp"] if location["timestamp"] else datetime.now(tz).strftime('%H:%M:%S')
+                    }
+                    processed_count += 1
+            
+            # BULK AREA VIOLATION CHECK - much more efficient
+            area_violations = check_area_violations_bulk(bulk_locations)
+            for violation in area_violations:
+                # Check if this area violation is already logged recently
+                if not any(i['taxi_id'] == violation['taxi_id'] and i['type'] == 'Area Violation' 
+                         for i in list(incident_log)[:5]):
+                    incident_log.appendleft(violation)
+                    area_violations_today += 1
+            
+            # OPTIMIZED SPEED VIOLATION CHECK - only process high speeds
+            for taxi_id, location in bulk_locations.items():
+                speed = location["speed"]
+                if speed > 60:  # Only process potential violations
+                    incident = {
+                        'taxi_id': taxi_id,
+                        'type': 'Speed Violation',
+                        'speed': speed,
+                        'lat': location['latitude'],
+                        'lng': location['longitude'],
+                        'timestamp': datetime.now(tz).strftime('%H:%M:%S')
+                    }
+                    # Quick blacklist check and duplicate prevention
+                    if (not is_blacklisted_incident(incident) and 
+                        not any(i['taxi_id'] == taxi_id and i['type'] == 'Speed Violation' 
+                               for i in list(incident_log)[:3])):  # Check only last 3
+                        incident_log.appendleft(incident)
+                        violations_today += 1
             
             # Update total distance covered from Flink calculations
             total_distance_covered = get_all_taxi_distances()
