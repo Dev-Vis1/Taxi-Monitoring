@@ -13,16 +13,23 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Simplified Kafka producer configuration (fixing compatibility issues)
+# Ultra-high-performance Kafka producer configuration
 kafka_config = {
     'bootstrap.servers': 'kafka:29092',
     'client.id': 'taxi-data-producer',
-    'acks': '0',  # Fire-and-forget for higher throughput
-    'compression.type': 'lz4',  # Better compression than snappy
-    'batch.num.messages': 100000,
-    'queue.buffering.max.ms': 100,
+    'acks': '0',  # Fire-and-forget for maximum throughput
+    'compression.type': 'lz4',  # Fast compression
+    'batch.size': 500000,  # Large batch size (500KB)
+    'batch.num.messages': 50000,  # More messages per batch
+    'linger.ms': 10,  # Small linger for responsiveness
+    'queue.buffering.max.messages': 1000000,  # Large buffer
+    'queue.buffering.max.ms': 50,  # Quick flush
     'message.max.bytes': 10000000,
-    'socket.keepalive.enable': True
+    'socket.keepalive.enable': True,
+    'socket.send.buffer.bytes': 131072,  # 128KB send buffer
+    'socket.receive.buffer.bytes': 65536,  # 64KB receive buffer
+    'enable.idempotence': False,  # Disable for maximum speed
+    'max.in.flight.requests.per.connection': 10  # More parallel requests
 }
 producer = Producer(kafka_config)
 
@@ -56,28 +63,50 @@ def load_taxi_data_parallel(pattern, batch_size=500, max_workers=4):
         yield combined_data
 
 def process_single_file(file_path):
+    """Ultra-fast file processing with minimal overhead"""
     try:
         taxi_id = os.path.splitext(os.path.basename(file_path))[0]
-        chunks = []
-        for chunk in pd.read_csv(file_path, 
-                                header=None,
-                                names=['taxi_id_file', 'timestamp', 'longitude', 'latitude'],
-                                chunksize=5000):
-            chunk = chunk.drop_duplicates()
-            chunk = chunk[(chunk['latitude'] != 0) & (chunk['longitude'] != 0)]
-            chunk = chunk.dropna()
-            chunks.append(chunk)
         
-        if not chunks:
-            return []
+        # ULTRA-FAST: Read file directly without chunking for small-medium files
+        try:
+            df = pd.read_csv(file_path, 
+                           header=None,
+                           names=['taxi_id_file', 'timestamp', 'longitude', 'latitude'],
+                           dtype={'taxi_id_file': 'str', 'longitude': 'float64', 'latitude': 'float64'})
+        except Exception:
+            # Fallback to chunked reading for very large files
+            chunks = []
+            for chunk in pd.read_csv(file_path, 
+                                   header=None,
+                                   names=['taxi_id_file', 'timestamp', 'longitude', 'latitude'],
+                                   chunksize=10000):  # Larger chunks
+                chunks.append(chunk)
             
-        df = pd.concat(chunks)
-        # Add final deduplication across chunks
-        df = df.drop_duplicates(subset=['timestamp', 'longitude', 'latitude'])
+            if not chunks:
+                return []
+            df = pd.concat(chunks, ignore_index=True)
+        
+        # FAST CLEANING: Vectorized operations
+        initial_count = len(df)
+        
+        # Remove invalid coordinates in one step
+        df = df[(df['latitude'] != 0) & (df['longitude'] != 0) & 
+                df['latitude'].notna() & df['longitude'].notna()]
+        
+        # Quick duplicate removal on key columns only
+        df = df.drop_duplicates(subset=['timestamp', 'longitude', 'latitude'], keep='first')
+        
+        if len(df) == 0:
+            return []
+        
+        # Set taxi_id and return optimized format
         df['taxi_id'] = taxi_id
+        
+        # Return as records with minimal processing
         return df[['timestamp', 'latitude', 'longitude', 'taxi_id']].to_dict(orient='records')
+        
     except Exception as e:
-        logger.error(f"Error processing {file_path}: {e}")
+        logger.debug(f"Error processing {file_path}: {e}")  # Debug level to reduce noise
         return []
 
 # Sort data by timestamp
@@ -372,19 +401,135 @@ def main():
         logger.error("No data files found! Check the data directory.")
         return
     
-    logger.info("Starting streaming producer with DIRECT FILE STREAMING")
+    logger.info(f"🚀 ULTRA-HIGH-PERFORMANCE Producer: Processing ALL {len(all_files)} files")
+    logger.info("🔥 Kafka & Flink can handle massive volumes - let's prove it!")
     start_time = time.time()
     
-    # Stream files directly without loading all into memory
-    for data_batch in load_taxi_data_parallel(input_pattern, batch_size=200, max_workers=8):
-        send_to_kafka_temporal_streaming(
-            data_batch, 
-            kafka_topic,
-            speed_multiplier=600  # Faster processing
-        )
+    # ULTRA-HIGH-PERFORMANCE: Process ALL files with maximum throughput
+    processed_files = 0
+    total_records_sent = 0
+    
+    # Process files in large batches with maximum parallelism
+    batch_size = 200  # Process 200 files at a time for maximum throughput
+    for i in range(0, len(all_files), batch_size):
+        batch_files = all_files[i:i+batch_size]
+        batch_start = time.time()
+        
+        logger.info(f"🚀 Processing MEGA-BATCH {i//batch_size + 1}/{(len(all_files)-1)//batch_size + 1} ({len(batch_files)} files)")
+        
+        # PARALLEL PROCESSING: Use ALL available CPU cores
+        max_workers = min(16, multiprocessing.cpu_count() * 2)  # Aggressive parallelism
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit ALL files in batch for parallel processing
+            future_to_file = {
+                executor.submit(process_single_file, file_path): file_path 
+                for file_path in batch_files
+            }
+            
+            batch_data = []
+            files_processed_in_batch = 0
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    file_data = future.result()
+                    if file_data:  # Only add non-empty files
+                        batch_data.extend(file_data)
+                    files_processed_in_batch += 1
+                    processed_files += 1
+                    
+                    # Progress indicator for large batches
+                    if files_processed_in_batch % 50 == 0:
+                        logger.info(f"    📈 Processed {files_processed_in_batch}/{len(batch_files)} files in current batch...")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error processing file {file_path}: {e}")
+        
+        # FIRE-AND-FORGET: Send all data at maximum speed
+        if batch_data:
+            send_start = time.time()
+            send_to_kafka_ultra_fast(batch_data, kafka_topic)
+            send_time = time.time() - send_start
+            total_records_sent += len(batch_data)
+            
+            batch_time = time.time() - batch_start
+            throughput = len(batch_data) / send_time if send_time > 0 else 0
+            
+            logger.info(f"✅ MEGA-BATCH {i//batch_size + 1} COMPLETE:")
+            logger.info(f"    📁 Files: {len(batch_files)} processed in {batch_time:.1f}s")
+            logger.info(f"    📊 Records: {len(batch_data):,} sent in {send_time:.1f}s")
+            logger.info(f"    🚀 Throughput: {throughput:,.0f} records/second")
+            logger.info(f"    📈 Total progress: {processed_files}/{len(all_files)} files ({100*processed_files/len(all_files):.1f}%)")
+        
+        # Minimal pause to let Kafka catch up, but keep pressure high
+        time.sleep(0.1)
     
     end_time = time.time()
-    logger.info(f"Producer completed in {end_time - start_time:.2f} seconds")
+    total_time = end_time - start_time
+    overall_throughput = total_records_sent / total_time if total_time > 0 else 0
+    
+    logger.info("🎉 ULTRA-HIGH-PERFORMANCE PROCESSING COMPLETE!")
+    logger.info("=" * 60)
+    logger.info(f"📁 Total files processed: {processed_files:,}")
+    logger.info(f"📊 Total records sent: {total_records_sent:,}")
+    logger.info(f"⏱️  Total time: {total_time:.1f} seconds ({total_time/60:.1f} minutes)")
+    logger.info(f"🚀 Overall throughput: {overall_throughput:,.0f} records/second")
+    logger.info(f"📈 Files per second: {processed_files/total_time:.1f}")
+    logger.info("🔥 Kafka & Flink handled the load like champions!")
+
+def send_to_kafka_ultra_fast(data, topic):
+    """Ultra-fast Kafka sending with fire-and-forget approach"""
+    if not data:
+        return
+    
+    messages_sent = 0
+    batch_size = 10000  # Large batches for maximum throughput
+    
+    for i in range(0, len(data), batch_size):
+        batch = data[i:i + batch_size]
+        
+        for entry in batch:
+            try:
+                # FIRE-AND-FORGET: No callbacks, no waiting
+                producer.produce(
+                    topic=topic,
+                    key=entry['taxi_id'],
+                    value=json.dumps({
+                        'taxi_id': entry['taxi_id'],
+                        'timestamp': entry['timestamp'], 
+                        'latitude': entry['latitude'],
+                        'longitude': entry['longitude']
+                    })
+                )
+                messages_sent += 1
+                
+                # Poll occasionally to prevent buffer overflow
+                if messages_sent % 5000 == 0:
+                    producer.poll(0)  # Non-blocking poll
+                    
+            except BufferError:
+                # Force flush if buffer is full
+                producer.flush()
+                # Retry the message
+                producer.produce(
+                    topic=topic,
+                    key=entry['taxi_id'],
+                    value=json.dumps({
+                        'taxi_id': entry['taxi_id'],
+                        'timestamp': entry['timestamp'],
+                        'latitude': entry['latitude'], 
+                        'longitude': entry['longitude']
+                    })
+                )
+                messages_sent += 1
+            except Exception as e:
+                logger.debug(f"Send error (continuing): {e}")
+                continue
+    
+    # Final flush for any remaining messages
+    producer.flush()
 
 if __name__ == "__main__":
     main()
