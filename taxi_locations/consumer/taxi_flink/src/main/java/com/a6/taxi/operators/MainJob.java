@@ -1,6 +1,6 @@
 package com.a6.taxi.operators;
 
-import com.a6.taxi.deserialization.TaxiLocationDeserializer;
+import com.a6.taxi.deserialization.*;
 import com.a6.taxi.dto.*;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.state.*;
@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 public class MainJob {
 
@@ -42,54 +43,73 @@ public class MainJob {
     private static final double MAX_RADIUS = 15.0;
     private static final double MAX_SPEED_KMH = 50.0;
     private static final double MAX_REASONABLE_SPEED = 200.0; // km/h
-    private static final long STATE_TTL_HOURS = 6;
+    private static final long STATE_TTL_MINUTES = 5; // Reduced from 6 hours to 5 minutes
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         
         // Enable checkpointing for fault tolerance and state recovery
-        env.enableCheckpointing(60000, CheckpointingMode.EXACTLY_ONCE);
-        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(30000);
-        env.getCheckpointConfig().setCheckpointTimeout(300000);
+        env.enableCheckpointing(10000, CheckpointingMode.EXACTLY_ONCE); // More frequent checkpoints
+        env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
+        env.getCheckpointConfig().setCheckpointTimeout(30000);
         env.getCheckpointConfig().setCheckpointStorage(new FileSystemCheckpointStorage("file:///checkpoints"));
         
-        // HIGH-THROUGHPUT configuration - OPTIMIZED for massive data volumes
-        env.setParallelism(8);  // Increased to fully utilize available slots
-        env.getConfig().setAutoWatermarkInterval(5000);  // Even less frequent watermarks for max performance
+        // Optimized for real-time processing - reduced parallelism for single TaskManager
+        env.setParallelism(2);  // Reduced from 8 to 2 to match available resources
+        env.getConfig().setAutoWatermarkInterval(1000);  // More frequent watermarks
         env.getConfig().enableObjectReuse();
         env.getConfig().setLatencyTrackingInterval(-1);  // Disable latency tracking
-        env.getConfig().setMaxParallelism(128);  // Allow for future scaling
+        env.getConfig().setMaxParallelism(16);  // Reduced from 128 to 16
 
-        // Kafka source configuration
+        // Kafka source configuration - uses existing TaxiLocationDeserializer
         KafkaSource<TaxiLocation> source = KafkaSource.<TaxiLocation>builder()
             .setBootstrapServers("kafka:29092")
             .setTopics("taxi-locations")
             .setGroupId("flink-taxi")
             .setStartingOffsets(OffsetsInitializer.earliest())
             .setValueOnlyDeserializer(new TaxiLocationDeserializer())
-            .setProperty("partition.discovery.interval.ms", "30000")  // Dynamic partition discovery
+            .setProperty("partition.discovery.interval.ms", "10000")
             .build();
 
-        // Watermark strategy with extreme performance optimization
+        // Watermark strategy optimized for real-time with null safety
         WatermarkStrategy<TaxiLocation> watermarkStrategy = WatermarkStrategy
-            .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofMinutes(2))  // Much higher tolerance for batch processing
+            .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofSeconds(5))
             .withTimestampAssigner((element, recordTimestamp) -> {
+                // Handle null elements safely
+                if (element == null || element.getTimestamp() == null) {
+                    return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
+                }
                 try {
                     return FastDateFormat.parse(element.getTimestamp());
                 } catch (ParseException e) {
-                    log.debug("Failed to parse timestamp for taxi {}: {}", element.getTaxiId(), element.getTimestamp());
-                    return System.currentTimeMillis();
+                    log.error("Failed to parse timestamp: {}", element.getTimestamp());
+                    return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
                 }
             })
-            .withIdleness(Duration.ofMinutes(15));  // Higher idleness for batch processing
+            .withIdleness(Duration.ofMinutes(1));
 
-        // Main stream
+        // Main stream - filter out null elements early and safely
         DataStream<TaxiLocation> locationStream = env.fromSource(
             source, 
             watermarkStrategy,
             "Kafka Source"
-        );
-
+        ).filter(location -> {
+            // Robust null checking with detailed logging
+            if (location == null) {
+                // Don't log every null - too noisy
+                return false;
+            }
+            if (location.getTaxiId() == null || location.getTaxiId().trim().isEmpty()) {
+                System.err.println("Filtered out location with null/empty taxi ID");
+                return false;
+            }
+            if (location.getLatitude() == 0.0 && location.getLongitude() == 0.0) {
+                System.err.println("Filtered out location with zero coordinates for taxi: " + location.getTaxiId());
+                return false;
+            }
+            return true;
+        }).name("NullSafeFilter");
+        
         // SPEED CALCULATION =====================================================
         SingleOutputStreamOperator<TaxiSpeed> speedStream = locationStream
             .keyBy(TaxiLocation::getTaxiId)
@@ -135,7 +155,7 @@ public class MainJob {
         avgSpeedStream.addSink(new RedisSink<>()).name("AvgSpeedRedisSink");
         distanceStream.addSink(new RedisSink<>()).name("DistanceRedisSink");
 
-        env.execute("Optimized Taxi Monitoring");
+        env.execute("Real-Time Taxi Monitoring");
     }
 
     // Optimized timestamp parser
@@ -180,10 +200,10 @@ public class MainJob {
         
         private transient ValueState<TaxiLocation> previousLocation;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.hours(STATE_TTL_HOURS))
+            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
             .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
             .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
-            .cleanupInRocksdbCompactFilter(1000)  // Enable RocksDB compaction filter
+            .cleanupInRocksdbCompactFilter(1000)
             .build();
 
         @Override
@@ -224,7 +244,6 @@ public class MainJob {
             double hours = timeDiff / 3600000.0;
             double speed = dist / hours;
 
-            // Validate and cap speed
             if (speed > MAX_REASONABLE_SPEED) {
                 log.debug("Capped speed for taxi {}: {:.2f} km/h", current.getTaxiId(), speed);
                 speed = MAX_REASONABLE_SPEED;
@@ -233,7 +252,6 @@ public class MainJob {
             TaxiSpeed speedData = new TaxiSpeed(current.getTaxiId(), speed);
             out.collect(speedData);
             
-            // Emit alert if needed
             if (speed > MAX_SPEED_KMH) {
                 context.output(SPEED_ALERTS,
                     "⚠️ Speed alert for Taxi " + current.getTaxiId() + 
@@ -249,7 +267,7 @@ public class MainJob {
         
         private transient ValueState<Tuple2<Integer, Double>> speedStats;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.hours(STATE_TTL_HOURS))
+            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
             .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
             .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
             .cleanupInRocksdbCompactFilter(1000)
@@ -298,7 +316,7 @@ public class MainJob {
         private transient ValueState<Double> accumulatedDistance;
         private transient ValueState<TaxiLocation> lastKnownLocation;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.hours(STATE_TTL_HOURS))
+            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
             .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
             .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
             .cleanupInRocksdbCompactFilter(1000)
