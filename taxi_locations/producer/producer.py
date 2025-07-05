@@ -154,6 +154,9 @@ def send_to_kafka_temporal_streaming(data, topic, speed_multiplier=120):
     streaming_start = time_module.time()
     last_log_time = streaming_start
     
+    # Track last watermark sent time
+    last_watermark_time = streaming_start
+    
     for i, (dt, entry) in enumerate(parsed_data):
         # Calculate proper timing to maintain chronological order
         time_since_start = (dt - start_time).total_seconds()
@@ -183,6 +186,17 @@ def send_to_kafka_temporal_streaming(data, topic, speed_multiplier=120):
             )
             messages_sent += 1
             
+            # Send watermark every 100 messages or 5 seconds
+            if messages_sent % 100 == 0 or (time_module.time() - last_watermark_time) > 5:
+                watermark_ts = int(dt.timestamp() * 1000)  # UTC milliseconds
+                producer.produce(
+                    topic=topic,
+                    key="WATERMARK",
+                    value=json.dumps({"watermark": watermark_ts})
+                )
+                last_watermark_time = time_module.time()
+                logger.debug(f"Sent watermark: {watermark_ts}")
+            
             # Flush regularly for smooth streaming
             if messages_sent % 100 == 0:
                 producer.flush()
@@ -195,6 +209,15 @@ def send_to_kafka_temporal_streaming(data, topic, speed_multiplier=120):
             progress = (i + 1) / len(parsed_data) * 100
             logger.info(f"Streaming progress: {progress:.1f}% ({messages_sent} messages sent)")
             last_log_time = time_module.time()
+    
+    # Send final watermark and end markers
+    final_watermark = int(end_time.timestamp() * 1000)
+    producer.produce(
+        topic=topic,
+        key="WATERMARK",
+        value=json.dumps({"watermark": final_watermark})
+    )
+    logger.info(f"Sent final watermark: {final_watermark}")
     
     # Final flush and summary
     producer.flush()
@@ -282,7 +305,6 @@ def on_delivery(err, msg):
     else:
         print(f'Message delivered to {msg.topic()} [Partition {msg.partition()}] at offset {msg.offset()}')
 
-
 def send_to_kafka_every_2_seconds(data, topic, update_interval=2.0):
     """Send taxi updates every 2 seconds for smooth real-time visualization with GLOBAL chronological order"""
     if not data:
@@ -358,6 +380,16 @@ def send_to_kafka_every_2_seconds(data, topic, update_interval=2.0):
                     batch_count += 1
                     last_timestamp = dt
                     
+                    # Send watermark periodically
+                    if messages_sent % 100 == 0:
+                        watermark_ts = int(dt.timestamp() * 1000)
+                        producer.produce(
+                            topic=topic,
+                            key="WATERMARK",
+                            value=json.dumps({"watermark": watermark_ts})
+                        )
+                        logger.debug(f"Sent watermark: {watermark_ts}")
+                        
                 except Exception as e:
                     logger.error(f"Failed to send message for taxi {entry['taxi_id']}: {e}")
             
@@ -378,11 +410,19 @@ def send_to_kafka_every_2_seconds(data, topic, update_interval=2.0):
         if sleep_time > 0:
             time_module.sleep(sleep_time)
     
+    # Final watermark
+    final_watermark = int(last_timestamp.timestamp() * 1000)
+    producer.produce(
+        topic=topic,
+        key="WATERMARK",
+        value=json.dumps({"watermark": final_watermark})
+    )
+    logger.info(f"Sent final watermark: {final_watermark}")
+    
     # Final flush
     producer.flush()
     logger.info(f"Completed streaming {messages_sent} messages in strict chronological order")
     logger.info(f"Final timestamp: {last_timestamp}")
-
 
 def main():
     input_pattern = '/app/data/*.txt'  # Fixed path for Docker container
@@ -447,10 +487,10 @@ def main():
                 except Exception as e:
                     logger.error(f"❌ Error processing file {file_path}: {e}")
         
-        # FIRE-AND-FORGET: Send all data at maximum speed
+        # TEMPORAL STREAMING: Send data in real-time chronological order
         if batch_data:
             send_start = time.time()
-            send_to_kafka_ultra_fast(batch_data, kafka_topic)
+            send_to_kafka_temporal_streaming(batch_data, kafka_topic, speed_multiplier=100000)  # 3600x faster (1 hour in 1 second)
             send_time = time.time() - send_start
             total_records_sent += len(batch_data)
             
@@ -478,58 +518,6 @@ def main():
     logger.info(f"🚀 Overall throughput: {overall_throughput:,.0f} records/second")
     logger.info(f"📈 Files per second: {processed_files/total_time:.1f}")
     logger.info("🔥 Kafka & Flink handled the load like champions!")
-
-def send_to_kafka_ultra_fast(data, topic):
-    """Ultra-fast Kafka sending with fire-and-forget approach"""
-    if not data:
-        return
-    
-    messages_sent = 0
-    batch_size = 10000  # Large batches for maximum throughput
-    
-    for i in range(0, len(data), batch_size):
-        batch = data[i:i + batch_size]
-        
-        for entry in batch:
-            try:
-                # FIRE-AND-FORGET: No callbacks, no waiting
-                producer.produce(
-                    topic=topic,
-                    key=entry['taxi_id'],
-                    value=json.dumps({
-                        'taxi_id': entry['taxi_id'],
-                        'timestamp': entry['timestamp'], 
-                        'latitude': entry['latitude'],
-                        'longitude': entry['longitude']
-                    })
-                )
-                messages_sent += 1
-                
-                # Poll occasionally to prevent buffer overflow
-                if messages_sent % 5000 == 0:
-                    producer.poll(0)  # Non-blocking poll
-                    
-            except BufferError:
-                # Force flush if buffer is full
-                producer.flush()
-                # Retry the message
-                producer.produce(
-                    topic=topic,
-                    key=entry['taxi_id'],
-                    value=json.dumps({
-                        'taxi_id': entry['taxi_id'],
-                        'timestamp': entry['timestamp'],
-                        'latitude': entry['latitude'], 
-                        'longitude': entry['longitude']
-                    })
-                )
-                messages_sent += 1
-            except Exception as e:
-                logger.debug(f"Send error (continuing): {e}")
-                continue
-    
-    # Final flush for any remaining messages
-    producer.flush()
 
 if __name__ == "__main__":
     main()

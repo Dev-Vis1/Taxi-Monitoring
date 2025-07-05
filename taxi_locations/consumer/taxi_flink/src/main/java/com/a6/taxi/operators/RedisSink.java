@@ -21,6 +21,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
     private static final long FLUSH_INTERVAL_MS = 100;
     private static final int MAX_RETRIES = 3;
     private volatile boolean running = true;
+    private static final int LOCATION_TTL_SECONDS = 300; // 5 minutes expiration
 
     @Override
     public void open(Configuration parameters) {
@@ -130,6 +131,8 @@ public class RedisSink<T> extends RichSinkFunction<T> {
     }
 
     private void processRecord(Pipeline pipelined, T input) {
+        long currentTimeSeconds = System.currentTimeMillis() / 1000;
+        
         if (input instanceof TaxiSpeed) {
             TaxiSpeed speed = (TaxiSpeed) input;
             pipelined.hset("metrics:speed", speed.getTaxiId(), String.valueOf(speed.getSpeed()));
@@ -147,23 +150,31 @@ public class RedisSink<T> extends RichSinkFunction<T> {
             String locationKey = "location:" + location.getTaxiId();
             String trajectoryKey = "trajectory:" + location.getTaxiId();
             
-            // Store current location
+            // Store current location with expiration
             pipelined.hset(locationKey, "lat", String.valueOf(location.getLatitude()));
             pipelined.hset(locationKey, "lon", String.valueOf(location.getLongitude()));
             pipelined.hset(locationKey, "time", location.getTimestamp());
+            pipelined.expire(locationKey, LOCATION_TTL_SECONDS);
             
-            // Store trajectory point - only 20% of trajectories to reduce memory
-            if (System.currentTimeMillis() % 5 == 0) {
-                pipelined.lpush(trajectoryKey, formatTrajectoryPoint(location));
-                pipelined.ltrim(trajectoryKey, 0, 4);  // Only last 5 positions
+            // Store trajectory point with expiration - RPUSH for chronological order
+            pipelined.rpush(trajectoryKey, formatTrajectoryPoint(location));
+            pipelined.ltrim(trajectoryKey, -5, -1);  // Keep last 5 positions
+            pipelined.expire(trajectoryKey, LOCATION_TTL_SECONDS);
+            
+            // Update active set using sorted set with timestamp score
+            pipelined.zadd("taxi:active", currentTimeSeconds, location.getTaxiId());
+            
+            // Periodically clean up old entries from active set (keep only last 5 minutes)
+            if (currentTimeSeconds % 30 == 0) {  // Every 30 seconds
+                long cutoffTime = currentTimeSeconds - LOCATION_TTL_SECONDS;
+                pipelined.zremrangeByScore("taxi:active", 0, cutoffTime);
             }
-            
-            // Update active set
-            pipelined.sadd("taxi:active", location.getTaxiId());
         }
     }
     
     private void processRecord(Jedis jedis, T input) {
+        long currentTimeSeconds = System.currentTimeMillis() / 1000;
+        
         if (input instanceof TaxiSpeed) {
             TaxiSpeed speed = (TaxiSpeed) input;
             jedis.hset("metrics:speed", speed.getTaxiId(), String.valueOf(speed.getSpeed()));
@@ -179,13 +190,27 @@ public class RedisSink<T> extends RichSinkFunction<T> {
         } else if (input instanceof TaxiLocation) {
             TaxiLocation location = (TaxiLocation) input;
             String locationKey = "location:" + location.getTaxiId();
+            String trajectoryKey = "trajectory:" + location.getTaxiId();
             
+            // Store current location with expiration
             jedis.hset(locationKey, "lat", String.valueOf(location.getLatitude()));
             jedis.hset(locationKey, "lon", String.valueOf(location.getLongitude()));
             jedis.hset(locationKey, "time", location.getTimestamp());
+            jedis.expire(locationKey, LOCATION_TTL_SECONDS);
             
-            // Only store trajectory in batch mode to reduce load
-            jedis.sadd("taxi:active", location.getTaxiId());
+            // Store trajectory point with expiration - RPUSH for chronological order
+            jedis.rpush(trajectoryKey, formatTrajectoryPoint(location));
+            jedis.ltrim(trajectoryKey, -5, -1);  // Keep last 5 positions
+            jedis.expire(trajectoryKey, LOCATION_TTL_SECONDS);
+            
+            // Update active set using sorted set with timestamp score
+            jedis.zadd("taxi:active", currentTimeSeconds, location.getTaxiId());
+            
+            // Periodically clean up old entries from active set (keep only last 5 minutes)
+            if (currentTimeSeconds % 30 == 0) {  // Every 30 seconds
+                long cutoffTime = currentTimeSeconds - LOCATION_TTL_SECONDS;
+                jedis.zremrangeByScore("taxi:active", 0, cutoffTime);
+            }
         }
     }
     
