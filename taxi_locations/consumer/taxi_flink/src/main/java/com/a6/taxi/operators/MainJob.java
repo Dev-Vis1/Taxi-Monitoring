@@ -73,11 +73,12 @@ public class MainJob {
         env.getCheckpointConfig().setCheckpointTimeout(300000);
         env.getCheckpointConfig().setCheckpointStorage(new FileSystemCheckpointStorage("file:///checkpoints"));
         
-        // High-throughput configuration - FIXED: Match TaskManager slots
-        env.setParallelism(4);  // Match available TaskManager slots (was 24)
-        env.getConfig().setAutoWatermarkInterval(500);  // More frequent watermarks
+        // HIGH-THROUGHPUT configuration - OPTIMIZED for massive data volumes
+        env.setParallelism(8);  // Increased to fully utilize available slots
+        env.getConfig().setAutoWatermarkInterval(5000);  // Even less frequent watermarks for max performance
         env.getConfig().enableObjectReuse();
         env.getConfig().setLatencyTrackingInterval(-1);  // Disable latency tracking
+        env.getConfig().setMaxParallelism(128);  // Allow for future scaling
 
         // Kafka source configuration
         KafkaSource<TaxiLocation> source = KafkaSource.<TaxiLocation>builder()
@@ -89,18 +90,18 @@ public class MainJob {
             .setProperty("partition.discovery.interval.ms", "30000")  // Dynamic partition discovery
             .build();
 
-        // Watermark strategy with optimized settings
+        // Watermark strategy with extreme performance optimization
         WatermarkStrategy<TaxiLocation> watermarkStrategy = WatermarkStrategy
-            .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofSeconds(15))
+            .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofMinutes(2))  // Much higher tolerance for batch processing
             .withTimestampAssigner((element, recordTimestamp) -> {
                 try {
                     return FastDateFormat.parse(element.getTimestamp());
                 } catch (ParseException e) {
-                    log.warn("Failed to parse timestamp for taxi {}: {}", element.getTaxiId(), element.getTimestamp());
+                    log.debug("Failed to parse timestamp for taxi {}: {}", element.getTaxiId(), element.getTimestamp());
                     return System.currentTimeMillis();
                 }
             })
-            .withIdleness(Duration.ofMinutes(5));  // Longer idleness timeout
+            .withIdleness(Duration.ofMinutes(15));  // Higher idleness for batch processing
 
         // Main stream
         DataStream<TaxiLocation> rawLocationStream = env.fromSource(

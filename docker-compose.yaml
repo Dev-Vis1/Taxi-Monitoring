@@ -31,26 +31,28 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_NUM_PARTITIONS: 30
+      KAFKA_NUM_PARTITIONS: 50
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
       KAFKA_MESSAGE_MAX_BYTES: 10485760
-      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
-      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 1048576
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 1048576
       KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
       KAFKA_LOG_RETENTION_HOURS: 12
       KAFKA_LOG_SEGMENT_BYTES: 1073741824
       KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
       KAFKA_COMPRESSION_TYPE: lz4
-      KAFKA_BATCH_SIZE: 131072
-      KAFKA_LINGER_MS: 5
+      KAFKA_BATCH_SIZE: 500000
+      KAFKA_LINGER_MS: 10
+      KAFKA_BUFFER_MEMORY: 67108864
+      KAFKA_ACKS: "0"
     restart: unless-stopped
     networks:
       - taxi_network
     deploy:
       resources:
         limits:
-          memory: 4G          # Reduced from 6G
-          cpus: "2.0"         # Reduced from 3.0
+          memory: 6G          # Increased for high throughput
+          cpus: "3.0"         # More CPU for processing
 
   python-producer:
     build:
@@ -62,15 +64,15 @@ services:
       - kafka
     environment:
       KAFKA_BROKER: kafka:29092
-      MAX_WORKERS: 8          # Reduced from 12
+      MAX_WORKERS: 16          # Increased for maximum throughput
     restart: unless-stopped
     networks:
       - taxi_network
     deploy:
       resources:
         limits:
-          memory: 4G          # Reduced from 8G
-          cpus: "2.0"         # Reduced from 4.0
+          memory: 4G          # Increased for processing large dataset
+          cpus: "4.0"         # Max CPU for parallel processing
 
   redis:
     image: redis:7.0-alpine
@@ -81,7 +83,7 @@ services:
       redis-server
       --save ""
       --appendonly no
-      --maxmemory 6gb
+      --maxmemory 2gb
       --maxmemory-policy allkeys-lru
       --timeout 300
       --tcp-keepalive 60
@@ -91,8 +93,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G          # Reduced from 8G
-          cpus: "2.0"         # Reduced from 4.0
+          memory: 2G          # Reduced from 4G for efficiency
+          cpus: "1.0"         # Reduced from 2.0
 
   dash-app:
     build:
@@ -122,16 +124,16 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
-        jobmanager.memory.process.size: 4096mb
+        jobmanager.memory.process.size: 3072mb
         state.backend: rocksdb
         state.checkpoints.dir: file:///checkpoints
         state.backend.rocksdb.memory.managed: true
-        state.backend.rocksdb.memory.fixed-per-slot: 256mb
-        execution.checkpointing.interval: 120s
-        execution.checkpointing.timeout: 5min
-        state.backend.rocksdb.block.cache-size: 64MB
-        state.backend.rocksdb.writebuffer.size: 32MB
-        env.java.opts: "-XX:MaxDirectMemorySize=2g -XX:NativeMemoryTracking=summary"
+        state.backend.rocksdb.memory.fixed-per-slot: 128mb
+        execution.checkpointing.interval: 180s
+        execution.checkpointing.timeout: 8min
+        state.backend.rocksdb.block.cache-size: 32MB
+        state.backend.rocksdb.writebuffer.size: 16MB
+        env.java.opts: "-XX:MaxDirectMemorySize=1g -XX:NativeMemoryTracking=summary"
     command: jobmanager
     restart: unless-stopped
     networks:
@@ -139,8 +141,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6G
-          cpus: "2.0"
+          memory: 3G          # Reduced from 6G
+          cpus: "1.5"         # Reduced from 2.0
   
   flink-taskmanager:
     image: flink:1.18.1-scala_2.12-java17
@@ -153,20 +155,22 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 4
-        taskmanager.memory.process.size: 4096mb
+        taskmanager.numberOfTaskSlots: 8
+        taskmanager.memory.process.size: 6144mb
         taskmanager.memory.managed.fraction: 0.7
-        state.backend.rocksdb.writebuffer.count: 2
-        state.backend.rocksdb.thread.num: 2
-        env.java.opts: "-XX:MaxDirectMemorySize=2g -XX:NativeMemoryTracking=summary"
+        state.backend.rocksdb.writebuffer.count: 4
+        state.backend.rocksdb.thread.num: 4
+        state.backend.rocksdb.block.cache-size: 64MB
+        state.backend.rocksdb.writebuffer.size: 32MB
+        env.java.opts: "-XX:MaxDirectMemorySize=3g -XX:NativeMemoryTracking=summary -XX:+UseG1GC"
     restart: unless-stopped
     networks:
       - taxi_network
     deploy:
       resources:
         limits:
-          memory: 5G
-          cpus: "4.0"
+          memory: 7G          # Increased to match new memory settings
+          cpus: "6.0"         # Increased to handle 8 slots efficiently
       replicas: 1
 
 networks:

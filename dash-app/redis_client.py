@@ -10,15 +10,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Optimized Redis connection with connection pool
+# Optimized Redis connection with ultra-high-performance connection pool
 pool = redis.ConnectionPool(
     host='redis', 
     port=6379, 
     db=0, 
-    max_connections=50,
+    max_connections=150,  # Increased for ultra-high throughput
     decode_responses=True,
-    socket_timeout=10, 
-    socket_connect_timeout=10
+    socket_timeout=3,     # Further reduced for faster timeouts
+    socket_connect_timeout=3,
+    retry_on_timeout=True,
+    health_check_interval=30
 )
 r = redis.Redis(connection_pool=pool)
 
@@ -533,32 +535,40 @@ def get_recently_active_taxi_ids(time_threshold_minutes=5):
         logger.error(f"Error fetching recently active taxi IDs: {e}")
         return []
 
-def get_batch_locations(taxi_ids, batch_size=200):
-    """Get locations for multiple taxis using Redis pipeline for better performance"""
+def get_batch_locations(taxi_ids, batch_size=1000):
+    """ULTRA-HIGH-PERFORMANCE: Get locations for multiple taxis using optimized Redis pipeline"""
     results = {}
     
-    # Process in batches to avoid memory issues
+    # Adaptive batch sizing for maximum performance
+    if len(taxi_ids) > 5000:
+        batch_size = 2000  # Very large batches for huge datasets
+    elif len(taxi_ids) > 2000:
+        batch_size = 1000  # Large batches for huge datasets
+    elif len(taxi_ids) > 500:
+        batch_size = 500   # Medium batches
+    else:
+        batch_size = min(batch_size, len(taxi_ids))
+    
+    # Process in optimized batches
     for i in range(0, len(taxi_ids), batch_size):
         batch_taxi_ids = taxi_ids[i:i + batch_size]
         
-        # Use pipeline for batch operations
+        # Use pipeline for ultra-fast batch operations
         pipe = r.pipeline()
         for taxi_id in batch_taxi_ids:
             pipe.hmget(f"location:{taxi_id}", ["lat", "lon", "time"])
             pipe.hget("metrics:speed", taxi_id)
-            pipe.get(f"last_violation:{taxi_id}")  # For duplicate check
         
         try:
             pipe_results = pipe.execute()
             
-            # Process results in groups of 3 (location, speed, violation)
-            for j in range(0, len(pipe_results), 3):
-                taxi_idx = j // 3
+            # Process results in groups of 2 (location, speed) for maximum speed
+            for j in range(0, len(pipe_results), 2):
+                taxi_idx = j // 2
                 if taxi_idx < len(batch_taxi_ids):
                     taxi_id = batch_taxi_ids[taxi_idx]
                     location_data = pipe_results[j]
                     speed_data = pipe_results[j + 1]
-                    last_violation = pipe_results[j + 2]
                     
                     if location_data and location_data[0] and location_data[1]:
                         try:
@@ -566,15 +576,15 @@ def get_batch_locations(taxi_ids, batch_size=200):
                                 'latitude': float(location_data[0]),
                                 'longitude': float(location_data[1]),
                                 'timestamp': location_data[2] or '',
-                                'speed': float(speed_data) if speed_data else 0.0,
-                                'last_violation': last_violation
+                                'speed': float(speed_data) if speed_data else 0.0
                             }
                         except (ValueError, TypeError):
                             continue
         except Exception as e:
-            logger.error(f"Error in batch location fetch: {e}")
+            logger.error(f"Error in ultra-fast batch location fetch: {e}")
             continue
     
+    logger.info(f"Ultra-fast batch fetch: {len(results)}/{len(taxi_ids)} locations in {len(taxi_ids)//batch_size + 1} batches")
     return results
 
 def check_area_violations_bulk(taxi_locations):
@@ -596,12 +606,26 @@ def check_area_violations_bulk(taxi_locations):
         violations = []
         for taxi_id, location in taxi_locations.items():
             if taxi_id not in in_area_set:
+                # Calculate distance from center for the violation report
+                import math
+                lat1, lon1 = location['latitude'], location['longitude']
+                lat2, lon2 = MONITORED_AREA['center_lat'], MONITORED_AREA['center_lon']
+                
+                # Haversine formula to calculate distance
+                lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                c = 2 * math.asin(math.sqrt(a))
+                distance_km = 6371.0 * c  # Earth radius in km
+                
                 violations.append({
                     'taxi_id': taxi_id,
                     'type': 'Area Violation',
                     'lat': location['latitude'],
                     'lng': location['longitude'],
-                    'timestamp': location['timestamp']
+                    'timestamp': location['timestamp'],
+                    'distance_from_center': distance_km
                 })
         
         return violations
