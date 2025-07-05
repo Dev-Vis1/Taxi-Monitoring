@@ -37,16 +37,17 @@ taxi_ids_cache_time = 0
 cache_expiry = 60  # Reduced to 1 minute for more frequent updates
 
 def get_all_taxi_ids():
-    """Get all taxi IDs using Redis SMEMBERS for better performance"""
+    """Get all taxi IDs using Redis ZRANGEBYSCORE for active taxis (sorted set)"""
     global taxi_ids_cache, taxi_ids_cache_time
     
     current_time = time.time()
     if taxi_ids_cache is None or (current_time - taxi_ids_cache_time) > cache_expiry:
         try:
-            # Use Redis set for active taxis - much faster than scanning keys
-            taxi_ids_cache = list(r.smembers('taxi:active'))
+            # Use Redis sorted set for active taxis - get only recent ones (last 5 minutes)
+            time_threshold = current_time - 300  # 5 minutes ago
+            taxi_ids_cache = r.zrangebyscore('taxi:active', time_threshold, current_time)
             taxi_ids_cache_time = current_time
-            logger.info(f"Refreshed taxi cache: {len(taxi_ids_cache)} active taxis")
+            logger.info(f"Refreshed taxi cache: {len(taxi_ids_cache)} active taxis (last 5 minutes)")
         except Exception as e:
             logger.error(f"Error fetching taxi IDs: {e}")
             if taxi_ids_cache is None:
