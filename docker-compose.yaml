@@ -52,7 +52,7 @@ services:
       resources:
         limits:
           memory: 6G          # Increased for high throughput
-          cpus: "3.0"         # More CPU for processing
+          cpus: "2.0"         # More CPU for processing
 
   python-producer:
     build:
@@ -72,7 +72,7 @@ services:
       resources:
         limits:
           memory: 4G          # Increased for processing large dataset
-          cpus: "4.0"         # Max CPU for parallel processing
+          cpus: "2.0"         # Max CPU for parallel processing
 
   redis:
     image: redis:7.0-alpine
@@ -170,7 +170,7 @@ services:
       resources:
         limits:
           memory: 7G          # Increased to match new memory settings
-          cpus: "6.0"         # Increased to handle 8 slots efficiently
+          cpus: "2.0"         # Increased to handle 8 slots efficiently
       replicas: 1
 
 networks:
