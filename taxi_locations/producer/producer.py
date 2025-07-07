@@ -490,7 +490,7 @@ def main():
         # TEMPORAL STREAMING: Send data in real-time chronological order
         if batch_data:
             send_start = time.time()
-            send_to_kafka_temporal_streaming(batch_data, kafka_topic, speed_multiplier=100000)  # 3600x faster (1 hour in 1 second)
+            send_to_kafka_temporal_streaming(batch_data, kafka_topic, speed_multiplier=120)  # 3600x faster (1 hour in 1 second)
             send_time = time.time() - send_start
             total_records_sent += len(batch_data)
             
