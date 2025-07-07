@@ -36,7 +36,7 @@ area_violations_today = 0  # New: Track area violations
 total_distance_covered = 0.0  # New: Track total distance covered by all taxis
 
 taxi_data = {}
-incident_log = deque(maxlen=20)
+incident_log = deque(maxlen=500)
 
 # REAL-TIME TRAJECTORY TRACKING - For smooth Uber-like movement
 taxi_trajectories = {}  # Store recent positions for each taxi
@@ -70,7 +70,12 @@ def is_in_monitored_area(lat, lon):
     c = 2 * math.asin(math.sqrt(a))
     distance = 6371.0 * c  # Same EARTH_RADIUS_KM as your Haversine.java
     
-    return distance <= MONITORED_AREA['max_radius_km'], distance 
+    if distance <= MONITORED_AREA['warning_radius_km']:
+        return "inside", distance
+    elif distance <= MONITORED_AREA['max_radius_km']:
+        return "warning", distance
+    else:
+        return "outside", distance
 
 def is_blacklisted_incident(incident):
     if incident['taxi_id'] in BLACKLISTED_TAXIS:
@@ -140,20 +145,26 @@ def fetch_simulation_data():
                         'timestamp': location["timestamp"] if location["timestamp"] else datetime.now(tz).strftime('%H:%M:%S')
                     }
                     processed_count += 1
-            
-            # BULK AREA VIOLATION CHECK - much more efficient
-            area_violations = check_area_violations_bulk(bulk_locations)
-            for violation in area_violations:
-                # Check if this area violation is already logged recently
-                if not any(i['taxi_id'] == violation['taxi_id'] and i['type'] == 'Area Violation' 
-                         for i in list(incident_log)[:5]):
-                    incident_log.appendleft(violation)
-                    area_violations_today += 1
+                    status, distance = is_in_monitored_area(current_lat, current_lon)
+                    if status == "warning":
+                        if not any(i['taxi_id'] == taxi_id and i['type'] == 'Warning Radius'
+                              for i in list(incident_log)[:5]):
+                            incident_log.appendleft({
+                            'taxi_id': taxi_id,
+                            'type': 'Warning Radius',
+                            'distance_from_center': distance,
+                            'lat': current_lat,
+                            'lng': current_lon,
+                            'timestamp': datetime.now(tz).strftime('%H:%M:%S')
+                        })
+                        print(f"Warning: Taxi {taxi_id} in warning zone ({distance:.2f} km)")
+                            # DEbugging code for warning
+                            # print(f"New WARNING RADIUS incident logged: Taxi {taxi_id} at {distance:.2f} km")
             
             # OPTIMIZED SPEED VIOLATION CHECK - only process high speeds
             for taxi_id, location in bulk_locations.items():
                 speed = location["speed"]
-                if speed > 60:  # Only process potential violations
+                if speed > 50:  # Only process potential violations
                     incident = {
                         'taxi_id': taxi_id,
                         'type': 'Speed Violation',
@@ -168,6 +179,22 @@ def fetch_simulation_data():
                                for i in list(incident_log)[:3])):  # Check only last 3
                         incident_log.appendleft(incident)
                         violations_today += 1
+                        
+            for taxi_id, data in new_taxi_data.items():
+                status, distance = is_in_monitored_area(data['lat'], data['lng'])
+                if status == "outside":
+                    if not any(i['taxi_id'] == taxi_id and i['type'] == 'Area Violation'
+                              for i in list(incident_log)[:5]):
+                        incident_log.appendleft({
+                            'taxi_id': taxi_id,
+                            'type': 'Area Violation',
+                            'distance_from_center': distance,
+                            'lat': data['lat'],
+                            'lng': data['lng'],
+                            'timestamp': datetime.now(tz).strftime('%H:%M:%S')
+                        })
+                        area_violations_today += 1
+                        print(f"Violation: Taxi {taxi_id} left monitored area ({distance:.2f} km)")
             
             # Update total distance covered from Flink calculations
             total_distance_covered = get_all_taxi_distances()
@@ -227,44 +254,91 @@ app.layout = dbc.Container(fluid=True, children=[
         # Left column
         dbc.Col(md=8, children=[
             # Map
+            # Map
             dbc.Card([
                 dbc.CardHeader([
-                    html.H4("Taxi Activity Map", className="card-title"),
                     html.Div([
-                        dbc.ButtonGroup([
-                            dbc.Button(html.I(className="fas fa-search-plus"), id="zoom-in", color="light"),
-                            dbc.Button(html.I(className="fas fa-search-minus"), id="zoom-out", color="light"),
-                            dbc.Button(html.I(className="fas fa-crosshairs"), id="reset-view", color="light"),
-                            dbc.Button([html.I(className="fas fa-route me-1"), "Trajectories"], 
-                                     id="toggle-trajectory", color="info", outline=True),
-                        ], className="me-2"),
+                        # Title on the left
+                        html.H4("Taxi Activity Map", className="card-title mb-0 me-3"),
+                        
+                        # Controls on the right - organized in two rows
                         html.Div([
-                            html.Label("Show Taxis:", className="text-muted small me-2"),
-                            dcc.Dropdown(
-                                id="taxi-limit",
-                                options=[
-                                    {"label": "All", "value": -1},
-                                    {"label": "5", "value": 5},
-                                    {"label": "10", "value": 10},
-                                    {"label": "15", "value": 15},
-                                    {"label": "20", "value": 20},
-                                    {"label": "30", "value": 30},
-                                    {"label": "50", "value": 50}
-                                ],
-                                value=-1,
-                                style={"width": "80px", "minWidth": "80px"},
-                                clearable=False
-                            )
-                        ], className="d-flex align-items-center me-3"),
-                        dcc.Dropdown(
-                            id="taxi-id",
-                            options=[{"label": tid, "value": tid} for tid in get_all_taxi_ids()],
-                            placeholder="Select Taxi to Track",
-                            style={"width": "300px"},
-                            clearable=True
-                        )
-                    ], className="float-end")
-                ], className="d-flex justify-content-between align-items-center"),
+                            # First row - ordered as requested
+                            html.Div([
+                                # 1. Monitored Area switch first
+                                html.Div([
+                                    html.Span("Monitored Area:", className="me-2 small"),
+                                    dbc.Switch(
+                                        id="area-filter-switch",
+                                        label=None,  # Label is now in the span
+                                        value=False,
+                                        className="d-inline-flex align-items-center me-3",
+                                        style={"verticalAlign": "middle"}
+                                    ),
+                                ], className="d-inline-flex align-items-center"),
+                                
+                                # 2. Trajectories toggle
+                                dbc.Button(
+                                    [html.I(className="fas fa-route me-2"), "Trajectories"],
+                                    id="toggle-trajectory",
+                                    color="info",
+                                    outline=True,
+                                    className="me-3 btn-sm py-1"
+                                ),
+                                
+                                # 3. Zoom controls last
+                                dbc.ButtonGroup([
+                                    dbc.Button(html.I(className="fas fa-search-plus"), 
+                                            id="zoom-in", 
+                                            color="light",
+                                            className="px-2 py-1 btn-sm"),
+                                    dbc.Button(html.I(className="fas fa-search-minus"), 
+                                            id="zoom-out", 
+                                            color="light",
+                                            className="px-2 py-1 btn-sm"),
+                                    dbc.Button(html.I(className="fas fa-crosshairs"), 
+                                            id="reset-view", 
+                                            color="light",
+                                            className="px-2 py-1 btn-sm"),
+                                ], className="me-0"),  # No right margin since it's last
+                            ], className="d-flex align-items-center mb-2"),
+                            
+                            # Second row - taxi controls
+                            html.Div([
+                                # Taxi limit dropdown
+                                html.Div([
+                                    html.Span("Filter Taxis:", className="me-2 small"),
+                                    dcc.Dropdown(
+                                        id="taxi-limit",
+                                        options=[
+                                            {"label": "All", "value": -1},
+                                            {"label": "5", "value": 5},
+                                            {"label": "10", "value": 10},
+                                            {"label": "15", "value": 15},
+                                            {"label": "20", "value": 20},
+                                            {"label": "30", "value": 30},
+                                            {"label": "50", "value": 50}
+                                        ],
+                                        value=-1,
+                                        style={"width": "100px"},
+                                        clearable=False,
+                                        className="me-3"
+                                    ),
+                                ], className="d-inline-flex align-items-center"),
+                                
+                                # Taxi selection dropdown
+                                dcc.Dropdown(
+                                    id="taxi-id",
+                                    options=[{"label": tid, "value": tid} for tid in get_all_taxi_ids()],
+                                    placeholder="Select Taxi...",
+                                    style={"width": "200px"},
+                                    clearable=True,
+                                )
+                            ], className="d-flex align-items-center")
+                        ], className="d-flex flex-column ms-auto", style={"width": "auto"})
+                    ], className="d-flex align-items-center w-100")
+                ], className="py-2"),
+                
                 dcc.Graph(
                     id='taxi-map',
                     config={'scrollZoom': True, 'displayModeBar': False},
@@ -373,6 +447,18 @@ app.layout = dbc.Container(fluid=True, children=[
                     html.H4("Recent Incidents", className="d-inline-block mb-0")
                 ]),
                 dbc.CardBody([
+                    dcc.Dropdown(
+                        id="incident-type-dropdown",
+                        options=[
+                            {"label": "All", "value": "All"},
+                            {"label": "Speed Violation", "value": "Speed Violation"},
+                            {"label": "Area Violation", "value": "Area Violation"},
+                            {"label": "Warning Radius", "value": "Warning Radius"},
+                        ],
+                        value="All",
+                        clearable=False,
+                        style={"marginBottom": "10px"}
+                    ),
                     html.Div(id="incidents-container", className="overflow-auto", style={"maxHeight": "400px"})
                 ])
             ], className="mb-4"),
@@ -401,6 +487,7 @@ app.layout = dbc.Container(fluid=True, children=[
     
     # Hidden div to store trajectory toggle state
     html.Div(id='trajectory-state', children='false', style={'display': 'none'}),
+    html.Div(id='area-filter-state', children='false', style={'display': 'none'}),
 ])
 
 # CSS styles
@@ -416,6 +503,18 @@ app.css.append_css({
             border-radius: 50%;
             background-color: #0f0;
             animation: pulse 2s infinite;
+        }
+        .map-controls .Select-control, 
+        .map-controls .Select-input, 
+        .map-controls .Select-menu-outer {
+            height: 38px;
+            vertical-align: middle;
+        }
+        .map-controls .Select-value {
+            line-height: 38px !important;
+        }
+        .map-controls .Select-input > input {
+            padding: 8px 0 12px !important;
         }
         @keyframes pulse {
             0% { opacity: 1; }
@@ -445,6 +544,12 @@ def update_time(n):
     now = datetime.now(tz)
     return now.strftime('%Y-%m-%d %H:%M:%S')
 
+@app.callback(
+    Output('area-filter-state', 'children'),
+    [Input('area-filter-switch', 'value')]
+)
+def update_area_filter_state(switch_value):
+    return 'true' if switch_value else 'false'
 # Trajectory toggle callback
 @app.callback(
     [Output('trajectory-state', 'children'),
@@ -480,11 +585,13 @@ def toggle_trajectory_display(n_clicks, current_state):
      Input('reset-view', 'n_clicks'),
      Input('taxi-id', 'value'),
      Input('trajectory-state', 'children'),
-     Input('taxi-limit', 'value')],
+     Input('taxi-limit', 'value'),
+     Input('area-filter-state', 'children'),
+     Input('incident-type-dropdown', 'value')], 
     [State('taxi-map', 'relayoutData'),
      State('taxi-map', 'figure')]
 )
-def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_trajectories, taxi_limit, relayout_data, current_figure):
+def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_trajectories, taxi_limit,area_filter_state,incident_type, relayout_data, current_figure):
     global violations_today, area_violations_today, total_distance_covered
     ctx = dash.callback_context
     
@@ -521,6 +628,16 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
     
     # Optimized data snapshot - avoid deep copy for performance
     taxi_data_snapshot = taxi_data.copy() if taxi_data else {}
+    if area_filter_state == 'true':
+
+        filtered_taxi_data = {}
+
+        for taxi_id, data in taxi_data_snapshot.items():
+
+            status, _ = is_in_monitored_area(data['lat'], data['lng'])
+            if status in ["inside", "warning"]:  # Only show taxis within 15km
+                filtered_taxi_data[taxi_id] = data
+        taxi_data_snapshot = filtered_taxi_data
     
     # Apply taxi limit if specified
     if taxi_limit > 0 and len(taxi_data_snapshot) > taxi_limit:
@@ -698,6 +815,28 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         showlegend=False,
         hoverinfo='none'
     ))
+    # Add warning radius circle (10 km, orange)
+    warning_circle_lat = []
+    warning_circle_lon = []
+    for i in range(101):
+        angle = 2 * np.pi * i / 100
+        lat_offset = MONITORED_AREA['warning_radius_km'] / 111.0
+        lon_offset = MONITORED_AREA['warning_radius_km'] / (111.0 * np.cos(np.radians(MONITORED_AREA['center_lat'])))
+        lat = MONITORED_AREA['center_lat'] + lat_offset * np.cos(angle)
+        lon = MONITORED_AREA['center_lon'] + lon_offset * np.sin(angle)
+        warning_circle_lat.append(lat)
+        warning_circle_lon.append(lon)
+
+    map_fig.add_trace(go.Scattermapbox(
+        lat=warning_circle_lat,
+        lon=warning_circle_lon,
+        mode="lines",
+        line=dict(width=2, color='rgba(0,0,0,0)'),
+        name="Warning Radius (10km)",
+        showlegend=False,
+        hoverinfo='none'
+    ))
+    
 
     # Update map layout with optimized settings
     map_fig.update_layout(
@@ -768,26 +907,35 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
     
     # Optimized incident cards generation - Enhanced for different violation types
     incident_cards = []
-    recent_incidents = list(incident_log)[:10]  # Only show last 10 incidents for performance
-    
+    recent_incidents = list(incident_log)[:10000]  # Only show last 10 incidents for performance
+    if incident_type and incident_type != "All":
+        recent_incidents = [i for i in recent_incidents if i.get('type') == incident_type]
+        
     if recent_incidents:
         for incident in recent_incidents:
             # Different styling for different incident types
             if incident['type'] == 'Speed Violation':
                 icon_class = "fas fa-tachometer-alt"
                 icon_bg = "bg-danger"
-                incident_text = f"Taxi {incident['taxi_id']} exceeded speed limit ({incident['speed']:.0f} km/h)"
-                location_text = f"Location: {incident['lat']:.4f}, {incident['lng']:.4f}"
+                incident_text = f"Taxi {incident.get('taxi_id', '?')} exceeded speed limit ({incident.get('speed', 0):.0f} km/h)"
+                location_text = f"Location: {incident.get('lat', 0):.4f}, {incident.get('lng', 0):.4f}"
             elif incident['type'] == 'Area Violation':
                 icon_class = "fas fa-map-marked-alt"
                 icon_bg = "bg-warning"
-                incident_text = f"Taxi {incident['taxi_id']} exited monitored area"
-                location_text = f"Distance from center: {incident['distance_from_center']:.2f} km"
+                incident_text = f"Taxi {incident.get('taxi_id', '?')} exited monitored area"
+                location_text = f"Distance from center: {incident.get('distance_from_center', 0):.2f} km"
+            # In your update_dashboard callback, modify the incident card generation:
+            elif incident['type'] == 'Warning Radius':
+                icon_class = "fas fa-exclamation-circle"  # Different icon for warning radius
+                icon_bg = "bg-warning"
+                incident_text = f"Taxi {incident.get('taxi_id', '?')} entered warning zone (10-15km)"
+                location_text = f"Distance from center: {incident.get('distance_from_center',0):.2f} km"
+                
             else:
                 icon_class = "fas fa-exclamation-triangle"
                 icon_bg = "bg-danger"
-                incident_text = f"Taxi {incident['taxi_id']} - {incident['type']}"
-                location_text = f"Location: {incident['lat']:.4f}, {incident['lng']:.4f}"
+                incident_text = f"Taxi {incident.get('taxi_id', '?')} - {incident.get('type', '?')}"
+                location_text = f"Location: {incident.get('lat', 0):.4f}, {incident.get('lng', 0):.4f}"
             
             card = dbc.Card(
                 dbc.CardBody([
