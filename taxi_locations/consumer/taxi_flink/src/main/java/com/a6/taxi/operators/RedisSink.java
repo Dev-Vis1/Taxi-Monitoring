@@ -21,11 +21,11 @@ public class RedisSink<T> extends RichSinkFunction<T> {
     private static final long FLUSH_INTERVAL_MS = 100;
     private static final int MAX_RETRIES = 3;
     private volatile boolean running = true;
-    private static final int LOCATION_TTL_SECONDS = 300; // 5 minutes expiration
+    private static final int LOCATION_TTL_SECONDS = 300;
 
     @Override
     public void open(Configuration parameters) {
-        // Optimized Redis connection pool
+        // Redis connection pool
         JedisPoolConfig config = new JedisPoolConfig();
         config.setMaxTotal(50);
         config.setMaxIdle(20);
@@ -34,10 +34,10 @@ public class RedisSink<T> extends RichSinkFunction<T> {
         config.setTestOnReturn(true);
         config.setTestWhileIdle(true);
         config.setMaxWait(Duration.ofSeconds(5));
-        
+
         jedisPool = new JedisPool(config, "redis", 6379, 5000);
         writeQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
-        
+
         // Start async writer
         executor = Executors.newSingleThreadExecutor();
         executor.submit(this::asyncWriter);
@@ -64,19 +64,22 @@ public class RedisSink<T> extends RichSinkFunction<T> {
     @Override
     public void invoke(T input, Context context) {
         if (!writeQueue.offer(input)) {
-            // Handle queue full situation with direct write
             writeDirectWithRetry(input);
         }
     }
-    
+
     private void writeDirectWithRetry(T input) {
         for (int i = 0; i < MAX_RETRIES; i++) {
             try (Jedis jedis = jedisPool.getResource()) {
                 processRecord(jedis, input);
                 return;
             } catch (JedisConnectionException e) {
-                System.err.println("Direct write failed, retry " + (i+1) + "/" + MAX_RETRIES);
-                try { Thread.sleep(100); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                System.err.println("Direct write failed, retry " + (i + 1) + "/" + MAX_RETRIES);
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
         System.err.println("Failed direct write after " + MAX_RETRIES + " attempts");
@@ -93,7 +96,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
                     // Drain as many as possible without blocking
                     writeQueue.drainTo(batch, BATCH_SIZE - batch.size());
                 }
-                
+
                 if (!batch.isEmpty() && (batch.size() >= BATCH_SIZE || record == null)) {
                     flushBatchWithRetry(batch);
                     batch.clear();
@@ -104,7 +107,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
                 System.err.println("Async writer error: " + e.getMessage());
             }
         }
-        
+
         // Flush any remaining records
         if (!batch.isEmpty()) {
             flushBatchWithRetry(batch);
@@ -115,16 +118,20 @@ public class RedisSink<T> extends RichSinkFunction<T> {
         for (int i = 0; i < MAX_RETRIES; i++) {
             try (Jedis jedis = jedisPool.getResource()) {
                 Pipeline pipeline = jedis.pipelined();
-                
+
                 for (T input : batch) {
                     processRecord(pipeline, input);
                 }
-                
+
                 pipeline.sync();
-                return; // Success, exit retry loop
+                return;
             } catch (JedisConnectionException e) {
-                System.err.println("Batch flush failed, retry " + (i+1) + "/" + MAX_RETRIES);
-                try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                System.err.println("Batch flush failed, retry " + (i + 1) + "/" + MAX_RETRIES);
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
         System.err.println("Failed batch flush after " + MAX_RETRIES + " attempts");
@@ -132,7 +139,7 @@ public class RedisSink<T> extends RichSinkFunction<T> {
 
     private void processRecord(Pipeline pipelined, T input) {
         long currentTimeSeconds = System.currentTimeMillis() / 1000;
-        
+
         if (input instanceof TaxiSpeed) {
             TaxiSpeed speed = (TaxiSpeed) input;
             pipelined.hset("metrics:speed", speed.getTaxiId(), String.valueOf(speed.getSpeed()));
@@ -149,32 +156,31 @@ public class RedisSink<T> extends RichSinkFunction<T> {
             TaxiLocation location = (TaxiLocation) input;
             String locationKey = "location:" + location.getTaxiId();
             String trajectoryKey = "trajectory:" + location.getTaxiId();
-            
+
             // Store current location with expiration
             pipelined.hset(locationKey, "lat", String.valueOf(location.getLatitude()));
             pipelined.hset(locationKey, "lon", String.valueOf(location.getLongitude()));
             pipelined.hset(locationKey, "time", location.getTimestamp());
             pipelined.expire(locationKey, LOCATION_TTL_SECONDS);
-            
+
             // Store trajectory point with expiration - RPUSH for chronological order
             pipelined.rpush(trajectoryKey, formatTrajectoryPoint(location));
-            pipelined.ltrim(trajectoryKey, -5, -1);  // Keep last 5 positions
+            pipelined.ltrim(trajectoryKey, -5, -1);
             pipelined.expire(trajectoryKey, LOCATION_TTL_SECONDS);
-            
+
             // Update active set using sorted set with timestamp score
             pipelined.zadd("taxi:active", currentTimeSeconds, location.getTaxiId());
-            
-            // Periodically clean up old entries from active set (keep only last 5 minutes)
-            if (currentTimeSeconds % 30 == 0) {  // Every 30 seconds
+
+            if (currentTimeSeconds % 30 == 0) {
                 long cutoffTime = currentTimeSeconds - LOCATION_TTL_SECONDS;
                 pipelined.zremrangeByScore("taxi:active", 0, cutoffTime);
             }
         }
     }
-    
+
     private void processRecord(Jedis jedis, T input) {
         long currentTimeSeconds = System.currentTimeMillis() / 1000;
-        
+
         if (input instanceof TaxiSpeed) {
             TaxiSpeed speed = (TaxiSpeed) input;
             jedis.hset("metrics:speed", speed.getTaxiId(), String.valueOf(speed.getSpeed()));
@@ -191,35 +197,34 @@ public class RedisSink<T> extends RichSinkFunction<T> {
             TaxiLocation location = (TaxiLocation) input;
             String locationKey = "location:" + location.getTaxiId();
             String trajectoryKey = "trajectory:" + location.getTaxiId();
-            
+
             // Store current location with expiration
             jedis.hset(locationKey, "lat", String.valueOf(location.getLatitude()));
             jedis.hset(locationKey, "lon", String.valueOf(location.getLongitude()));
             jedis.hset(locationKey, "time", location.getTimestamp());
             jedis.expire(locationKey, LOCATION_TTL_SECONDS);
-            
+
             // Store trajectory point with expiration - RPUSH for chronological order
             jedis.rpush(trajectoryKey, formatTrajectoryPoint(location));
-            jedis.ltrim(trajectoryKey, -5, -1);  // Keep last 5 positions
+            jedis.ltrim(trajectoryKey, -5, -1);
             jedis.expire(trajectoryKey, LOCATION_TTL_SECONDS);
-            
+
             // Update active set using sorted set with timestamp score
             jedis.zadd("taxi:active", currentTimeSeconds, location.getTaxiId());
-            
-            // Periodically clean up old entries from active set (keep only last 5 minutes)
-            if (currentTimeSeconds % 30 == 0) {  // Every 30 seconds
+
+            // Periodically clean up old entries from active set
+            if (currentTimeSeconds % 30 == 0) {
                 long cutoffTime = currentTimeSeconds - LOCATION_TTL_SECONDS;
                 jedis.zremrangeByScore("taxi:active", 0, cutoffTime);
             }
         }
     }
-    
+
     private String formatTrajectoryPoint(TaxiLocation location) {
         return String.format(
-            "{\"lat\":%.6f,\"lon\":%.6f,\"time\":\"%s\"}",
-            location.getLatitude(),
-            location.getLongitude(), 
-            location.getTimestamp()
-        );
+                "{\"lat\":%.6f,\"lon\":%.6f,\"time\":\"%s\"}",
+                location.getLatitude(),
+                location.getLongitude(),
+                location.getTimestamp());
     }
 }

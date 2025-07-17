@@ -33,8 +33,10 @@ public class MainJob {
     private static final Logger log = LoggerFactory.getLogger(MainJob.class);
 
     // Define side outputs for different alert types
-    private static final OutputTag<String> SPEED_ALERTS = new OutputTag<String>("speed-alerts") {};
-    private static final OutputTag<String> ZONE_ALERTS = new OutputTag<String>("zone-alerts") {};
+    private static final OutputTag<String> SPEED_ALERTS = new OutputTag<String>("speed-alerts") {
+    };
+    private static final OutputTag<String> ZONE_ALERTS = new OutputTag<String>("zone-alerts") {
+    };
 
     // Constants
     private static final double CENTER_LAT = 39.9163;
@@ -42,114 +44,110 @@ public class MainJob {
     private static final double WARNING_RADIUS = 10.0;
     private static final double MAX_RADIUS = 15.0;
     private static final double MAX_SPEED_KMH = 50.0;
-    private static final double MAX_REASONABLE_SPEED = 200.0; // km/h
-    private static final long STATE_TTL_MINUTES = 5; // Reduced from 6 hours to 5 minutes
+    private static final double MAX_REASONABLE_SPEED = 200.0;
+    private static final long STATE_TTL_MINUTES = 5;
 
     public static void main(String[] args) throws Exception {
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        
-        // Enable checkpointing for fault tolerance and state recovery
-        env.enableCheckpointing(10000, CheckpointingMode.EXACTLY_ONCE); // More frequent checkpoints
+
+        env.enableCheckpointing(10000, CheckpointingMode.EXACTLY_ONCE);
         env.getCheckpointConfig().setMinPauseBetweenCheckpoints(5000);
         env.getCheckpointConfig().setCheckpointTimeout(30000);
         env.getCheckpointConfig().setCheckpointStorage(new FileSystemCheckpointStorage("file:///checkpoints"));
-        
-        // Optimized for real-time processing - reduced parallelism for single TaskManager
-        env.setParallelism(2);  // Reduced from 8 to 2 to match available resources
-        env.getConfig().setAutoWatermarkInterval(1000);  // More frequent watermarks
+
+        env.setParallelism(2);
+        env.getConfig().setAutoWatermarkInterval(1000);
         env.getConfig().enableObjectReuse();
-        env.getConfig().setLatencyTrackingInterval(-1);  // Disable latency tracking
-        env.getConfig().setMaxParallelism(16);  // Reduced from 128 to 16
+        env.getConfig().setLatencyTrackingInterval(-1);
+        env.getConfig().setMaxParallelism(16);
 
-        // Kafka source configuration - uses existing TaxiLocationDeserializer
+        // Kafka source configuration - uses TaxiLocationDeserializer
         KafkaSource<TaxiLocation> source = KafkaSource.<TaxiLocation>builder()
-            .setBootstrapServers("kafka:29092")
-            .setTopics("taxi-locations")
-            .setGroupId("flink-taxi")
-            .setStartingOffsets(OffsetsInitializer.earliest())
-            .setValueOnlyDeserializer(new TaxiLocationDeserializer())
-            .setProperty("partition.discovery.interval.ms", "10000")
-            .build();
+                .setBootstrapServers("kafka:29092")
+                .setTopics("taxi-locations")
+                .setGroupId("flink-taxi")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setValueOnlyDeserializer(new TaxiLocationDeserializer())
+                .setProperty("partition.discovery.interval.ms", "10000")
+                .build();
 
-        // Watermark strategy optimized for real-time with null safety
+        // Watermark strategy real-time with null safety
         WatermarkStrategy<TaxiLocation> watermarkStrategy = WatermarkStrategy
-            .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofSeconds(5))
-            .withTimestampAssigner((element, recordTimestamp) -> {
-                // Handle null elements safely
-                if (element == null || element.getTimestamp() == null) {
-                    return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
-                }
-                try {
-                    return FastDateFormat.parse(element.getTimestamp());
-                } catch (ParseException e) {
-                    log.error("Failed to parse timestamp: {}", element.getTimestamp());
-                    return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
-                }
-            })
-            .withIdleness(Duration.ofMinutes(1));
+                .<TaxiLocation>forBoundedOutOfOrderness(Duration.ofSeconds(5))
+                .withTimestampAssigner((element, recordTimestamp) -> {
+                    if (element == null || element.getTimestamp() == null) {
+                        return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
+                    }
+                    try {
+                        return FastDateFormat.parse(element.getTimestamp());
+                    } catch (ParseException e) {
+                        log.error("Failed to parse timestamp: {}", element.getTimestamp());
+                        return System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(30);
+                    }
+                })
+                .withIdleness(Duration.ofMinutes(1));
 
-        // Main stream - filter out null elements early and safely
+        // Main stream
         DataStream<TaxiLocation> locationStream = env.fromSource(
-            source, 
-            watermarkStrategy,
-            "Kafka Source"
-        ).filter(location -> {
-            // Robust null checking with detailed logging
-            if (location == null) {
-                // Don't log every null - too noisy
-                return false;
-            }
-            if (location.getTaxiId() == null || location.getTaxiId().trim().isEmpty()) {
-                System.err.println("Filtered out location with null/empty taxi ID");
-                return false;
-            }
-            if (location.getLatitude() == 0.0 && location.getLongitude() == 0.0) {
-                System.err.println("Filtered out location with zero coordinates for taxi: " + location.getTaxiId());
-                return false;
-            }
-            return true;
-        }).name("NullSafeFilter");
-        
+                source,
+                watermarkStrategy,
+                "Kafka Source").filter(location -> {
+                    // Robust null checking with detailed logging
+                    if (location == null) {
+                        return false;
+                    }
+                    if (location.getTaxiId() == null || location.getTaxiId().trim().isEmpty()) {
+                        System.err.println("Filtered out location with null/empty taxi ID");
+                        return false;
+                    }
+                    if (location.getLatitude() == 0.0 && location.getLongitude() == 0.0) {
+                        System.err.println(
+                                "Filtered out location with zero coordinates for taxi: " + location.getTaxiId());
+                        return false;
+                    }
+                    return true;
+                }).name("NullSafeFilter");
+
         // SPEED CALCULATION =====================================================
         SingleOutputStreamOperator<TaxiSpeed> speedStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new SpeedCalculator())
-            .name("SpeedCalculator")
-            .uid("speed-calculator");
+                .keyBy(TaxiLocation::getTaxiId)
+                .process(new SpeedCalculator())
+                .name("SpeedCalculator")
+                .uid("speed-calculator");
 
         // SPEED ALERTS ==========================================================
         DataStream<String> speedAlerts = speedStream
-            .getSideOutput(SPEED_ALERTS);
-        
+                .getSideOutput(SPEED_ALERTS);
+
         speedAlerts.addSink(new LogSink("SPEED ALERT"));
-        
+
         // ZONE EXIT ALERTS ======================================================
         SingleOutputStreamOperator<TaxiLocation> zoneStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new ZoneExitNotifier())
-            .name("ZoneExitNotifier")
-            .uid("zone-notifier");
-        
+                .keyBy(TaxiLocation::getTaxiId)
+                .process(new ZoneExitNotifier())
+                .name("ZoneExitNotifier")
+                .uid("zone-notifier");
+
         DataStream<String> zoneAlerts = zoneStream
-            .getSideOutput(ZONE_ALERTS);
-        
+                .getSideOutput(ZONE_ALERTS);
+
         zoneAlerts.addSink(new LogSink("ZONE ALERT"));
-        
+
         // AVERAGE SPEED =========================================================
         SingleOutputStreamOperator<TaxiAverageSpeed> avgSpeedStream = speedStream
-            .keyBy(TaxiSpeed::getTaxiId)
-            .process(new AverageSpeedCalculator())
-            .name("AverageSpeedCalculator")
-            .uid("avg-speed-calculator");
-        
+                .keyBy(TaxiSpeed::getTaxiId)
+                .process(new AverageSpeedCalculator())
+                .name("AverageSpeedCalculator")
+                .uid("avg-speed-calculator");
+
         // DISTANCE TRACKING =====================================================
         SingleOutputStreamOperator<TaxiDistance> distanceStream = locationStream
-            .keyBy(TaxiLocation::getTaxiId)
-            .process(new DistanceTracker())
-            .name("DistanceTracker")
-            .uid("distance-tracker");
-        
-        // REDIS SINK CONNECTIONS ================================================
+                .keyBy(TaxiLocation::getTaxiId)
+                .process(new DistanceTracker())
+                .name("DistanceTracker")
+                .uid("distance-tracker");
+
+        // REDIS SINK CONNECTIONS
         locationStream.addSink(new RedisSink<>()).name("LocationRedisSink");
         speedStream.addSink(new RedisSink<>()).name("SpeedRedisSink");
         avgSpeedStream.addSink(new RedisSink<>()).name("AvgSpeedRedisSink");
@@ -158,74 +156,71 @@ public class MainJob {
         env.execute("Real-Time Taxi Monitoring");
     }
 
-    // Optimized timestamp parser
+    // Timestamp parser
     private static class FastDateFormat {
-        private static final ThreadLocal<SimpleDateFormat> FORMATTER = 
-            ThreadLocal.withInitial(() -> new SimpleDateFormat("yyyy-MM-dd HH:mm:ss"));
-        
+        private static final ThreadLocal<SimpleDateFormat> FORMATTER = ThreadLocal
+                .withInitial(() -> new SimpleDateFormat("yyyy-MM-dd HH:mm:ss"));
+
         public static long parse(String timestamp) throws ParseException {
             return FORMATTER.get().parse(timestamp).getTime();
         }
     }
 
-    // Zone Exit Notifier ========================================================
-    public static class ZoneExitNotifier 
-        extends KeyedProcessFunction<String, TaxiLocation, TaxiLocation> {
-        
+    // Zone Exit Notifier
+    public static class ZoneExitNotifier
+            extends KeyedProcessFunction<String, TaxiLocation, TaxiLocation> {
+
         @Override
         public void processElement(
-            TaxiLocation location, 
-            Context context, 
-            Collector<TaxiLocation> out
-        ) {
+                TaxiLocation location,
+                Context context,
+                Collector<TaxiLocation> out) {
             out.collect(location);
-            
+
             double distance = Haversine.computeDistance(
-                CENTER_LAT, CENTER_LON, 
-                location.getLatitude(), location.getLongitude()
-            );
-            
+                    CENTER_LAT, CENTER_LON,
+                    location.getLatitude(), location.getLongitude());
+
             if (distance > WARNING_RADIUS && distance <= MAX_RADIUS) {
                 context.output(ZONE_ALERTS,
-                    "⚠️ Taxi " + location.getTaxiId() + 
-                    " exiting zone. Distance: " + String.format("%.2f", distance) + " km"
-                );
+                        "⚠️ Taxi " + location.getTaxiId() +
+                                " exiting zone. Distance: " + String.format("%.2f", distance) + " km");
             }
         }
     }
 
-    // Speed Calculator ==========================================================
-    public static class SpeedCalculator 
-        extends KeyedProcessFunction<String, TaxiLocation, TaxiSpeed> {
-        
+    // Speed Calculator =====================================================
+    public static class SpeedCalculator
+            extends KeyedProcessFunction<String, TaxiLocation, TaxiSpeed> {
+
         private transient ValueState<TaxiLocation> previousLocation;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
-            .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
-            .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
-            .cleanupInRocksdbCompactFilter(1000)
-            .build();
+                .newBuilder(Time.minutes(STATE_TTL_MINUTES))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .cleanupInRocksdbCompactFilter(1000)
+                .build();
 
         @Override
         public void open(Configuration config) {
             ValueStateDescriptor<TaxiLocation> desc = new ValueStateDescriptor<>(
-                "lastLocation", 
-                TypeInformation.of(new TypeHint<TaxiLocation>() {})
-            );
+                    "lastLocation",
+                    TypeInformation.of(new TypeHint<TaxiLocation>() {
+                    }));
             desc.enableTimeToLive(ttlConfig);
             previousLocation = getRuntimeContext().getState(desc);
         }
 
         @Override
         public void processElement(
-            TaxiLocation current, 
-            Context context, 
-            Collector<TaxiSpeed> out
-        ) throws Exception {
+                TaxiLocation current,
+                Context context,
+                Collector<TaxiSpeed> out) throws Exception {
             TaxiLocation previous = previousLocation.value();
             previousLocation.update(current);
 
-            if (previous == null) return;
+            if (previous == null)
+                return;
 
             long t1 = FastDateFormat.parse(previous.getTimestamp());
             long t2 = FastDateFormat.parse(current.getTimestamp());
@@ -237,10 +232,9 @@ public class MainJob {
             }
 
             double dist = Haversine.computeDistance(
-                previous.getLatitude(), previous.getLongitude(),
-                current.getLatitude(), current.getLongitude()
-            );
-            
+                    previous.getLatitude(), previous.getLongitude(),
+                    current.getLatitude(), current.getLongitude());
+
             double hours = timeDiff / 3600000.0;
             double speed = dist / hours;
 
@@ -248,48 +242,45 @@ public class MainJob {
                 log.debug("Capped speed for taxi {}: {:.2f} km/h", current.getTaxiId(), speed);
                 speed = MAX_REASONABLE_SPEED;
             }
-            
+
             TaxiSpeed speedData = new TaxiSpeed(current.getTaxiId(), speed);
             out.collect(speedData);
-            
+
             if (speed > MAX_SPEED_KMH) {
                 context.output(SPEED_ALERTS,
-                    "⚠️ Speed alert for Taxi " + current.getTaxiId() + 
-                    ": " + String.format("%.2f", speed) + " km/h"
-                );
+                        "⚠️ Speed alert for Taxi " + current.getTaxiId() +
+                                ": " + String.format("%.2f", speed) + " km/h");
             }
         }
     }
 
     // Average Speed Calculator ==================================================
-    public static class AverageSpeedCalculator 
-        extends KeyedProcessFunction<String, TaxiSpeed, TaxiAverageSpeed> {
-        
+    public static class AverageSpeedCalculator
+            extends KeyedProcessFunction<String, TaxiSpeed, TaxiAverageSpeed> {
+
         private transient ValueState<Tuple2<Integer, Double>> speedStats;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
-            .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
-            .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
-            .cleanupInRocksdbCompactFilter(1000)
-            .build();
+                .newBuilder(Time.minutes(STATE_TTL_MINUTES))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .cleanupInRocksdbCompactFilter(1000)
+                .build();
 
         @Override
         public void open(Configuration config) {
-            ValueStateDescriptor<Tuple2<Integer, Double>> descriptor = 
-                new ValueStateDescriptor<>(
+            ValueStateDescriptor<Tuple2<Integer, Double>> descriptor = new ValueStateDescriptor<>(
                     "speedStats",
-                    TypeInformation.of(new TypeHint<Tuple2<Integer, Double>>() {})
-                );
+                    TypeInformation.of(new TypeHint<Tuple2<Integer, Double>>() {
+                    }));
             descriptor.enableTimeToLive(ttlConfig);
             speedStats = getRuntimeContext().getState(descriptor);
         }
 
         @Override
         public void processElement(
-            TaxiSpeed speed, 
-            Context context, 
-            Collector<TaxiAverageSpeed> out
-        ) throws Exception {
+                TaxiSpeed speed,
+                Context context,
+                Collector<TaxiAverageSpeed> out) throws Exception {
             Tuple2<Integer, Double> current = speedStats.value();
             if (current == null) {
                 current = Tuple2.of(0, 0.0);
@@ -310,41 +301,38 @@ public class MainJob {
     }
 
     // Distance Tracker ==========================================================
-    public static class DistanceTracker 
-        extends KeyedProcessFunction<String, TaxiLocation, TaxiDistance> {
-        
+    public static class DistanceTracker
+            extends KeyedProcessFunction<String, TaxiLocation, TaxiDistance> {
+
         private transient ValueState<Double> accumulatedDistance;
         private transient ValueState<TaxiLocation> lastKnownLocation;
         private final StateTtlConfig ttlConfig = StateTtlConfig
-            .newBuilder(Time.minutes(STATE_TTL_MINUTES))
-            .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
-            .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
-            .cleanupInRocksdbCompactFilter(1000)
-            .build();
+                .newBuilder(Time.minutes(STATE_TTL_MINUTES))
+                .setUpdateType(StateTtlConfig.UpdateType.OnCreateAndWrite)
+                .setStateVisibility(StateTtlConfig.StateVisibility.NeverReturnExpired)
+                .cleanupInRocksdbCompactFilter(1000)
+                .build();
 
         @Override
         public void open(Configuration config) {
             ValueStateDescriptor<Double> distanceDesc = new ValueStateDescriptor<>(
-                "accumulatedDistance", 
-                Double.class
-            );
+                    "accumulatedDistance",
+                    Double.class);
             distanceDesc.enableTimeToLive(ttlConfig);
             accumulatedDistance = getRuntimeContext().getState(distanceDesc);
-            
+
             ValueStateDescriptor<TaxiLocation> locationDesc = new ValueStateDescriptor<>(
-                "lastKnownLocation", 
-                TaxiLocation.class
-            );
+                    "lastKnownLocation",
+                    TaxiLocation.class);
             locationDesc.enableTimeToLive(ttlConfig);
             lastKnownLocation = getRuntimeContext().getState(locationDesc);
         }
 
         @Override
         public void processElement(
-            TaxiLocation current, 
-            Context context, 
-            Collector<TaxiDistance> out
-        ) throws Exception {
+                TaxiLocation current,
+                Context context,
+                Collector<TaxiDistance> out) throws Exception {
             Double totalDistance = accumulatedDistance.value();
             if (totalDistance == null) {
                 totalDistance = 0.0;
@@ -355,9 +343,8 @@ public class MainJob {
 
             if (previous != null) {
                 double segment = Haversine.computeDistance(
-                    previous.getLatitude(), previous.getLongitude(),
-                    current.getLatitude(), current.getLongitude()
-                );
+                        previous.getLatitude(), previous.getLongitude(),
+                        current.getLatitude(), current.getLongitude());
                 totalDistance += segment;
             }
 
@@ -370,11 +357,11 @@ public class MainJob {
     private static class LogSink implements SinkFunction<String> {
         private final String label;
         private static final Logger logger = LoggerFactory.getLogger(LogSink.class);
-        
+
         LogSink(String label) {
             this.label = label;
         }
-        
+
         @Override
         public void invoke(String message, Context context) {
             logger.info("[{}] {}", label, message);

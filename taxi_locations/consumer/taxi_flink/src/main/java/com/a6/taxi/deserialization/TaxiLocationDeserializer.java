@@ -19,7 +19,6 @@ public class TaxiLocationDeserializer implements DeserializationSchema<TaxiLocat
 
     @Override
     public boolean isEndOfStream(TaxiLocation location) {
-        // Continuous stream; no end-of-stream marker
         return false;
     }
 
