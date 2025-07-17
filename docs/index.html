@@ -1,0 +1,2198 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beijing Taxi Monitoring System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.4/gsap.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <style>
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
+      }
+      @keyframes flow {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(100vw);
+        }
+      }
+      @keyframes bounce {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(-10px);
+        }
+      }
+      .pulse-animation {
+        animation: pulse 2s infinite;
+      }
+      .flow-animation {
+        animation: flow 8s linear infinite;
+      }
+      .bounce-animation {
+        animation: bounce 1.5s infinite;
+      }
+      .component-card {
+        transition: all 0.3s ease;
+      }
+      .component-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+      }
+      .tooltip {
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .has-tooltip:hover .tooltip {
+        visibility: visible;
+        opacity: 1;
+      }
+      .geofence {
+        stroke-dasharray: 10;
+        animation: dash 30s linear infinite;
+      }
+      @keyframes dash {
+        to {
+          stroke-dashoffset: 1000;
+        }
+      }
+      .taxi-icon {
+        transition: all 1s ease;
+      }
+      .code-block {
+        font-family: "Courier New", monospace;
+        background-color: #1e293b;
+        color: #f8fafc;
+      }
+      .state-ttl {
+        position: relative;
+        overflow: hidden;
+      }
+      .state-ttl::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 255, 255, 0.2),
+          transparent
+        );
+        animation: shine 2s infinite;
+      }
+      @keyframes shine {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(100%);
+        }
+      }
+
+      /* New animation styles */
+      .component-kafka {
+        border-color: #ff7b00;
+        background-color: #fff5eb;
+      }
+      .component-flink {
+        border-color: #1c73e8;
+        background-color: #ebf3ff;
+      }
+      .component-redis {
+        border-color: #d82c20;
+        background-color: #ffebeb;
+      }
+      .component-dash {
+        border-color: #10b981;
+        background-color: #ecfdf5;
+      }
+      .data-point {
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #4f46e5;
+      }
+      .arrow {
+        position: relative;
+      }
+      .arrow::after {
+        content: "→";
+        position: absolute;
+        right: -20px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 1.25rem;
+        color: #6b7280;
+      }
+      @keyframes moveRight {
+        0% {
+          left: 0;
+          opacity: 0;
+        }
+        10% {
+          opacity: 1;
+        }
+        90% {
+          opacity: 1;
+        }
+        100% {
+          left: 100%;
+          opacity: 0;
+        }
+      }
+      @keyframes flash {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7);
+        }
+        50% {
+          box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
+        }
+      }
+      .data-particle {
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #4f46e5;
+      }
+      .tab-button {
+        transition: all 0.2s ease;
+        cursor: pointer;
+        outline: none;
+      }
+      .tab-button:hover {
+        color: #4f46e5;
+        border-color: #4f46e5;
+      }
+      .tab-button.active {
+        color: #4f46e5;
+        border-color: #4f46e5;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50 font-sans">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-lg sticky top-0 z-50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex justify-between h-16">
+          <div class="flex items-center">
+            <div class="flex-shrink-0 flex items-center">
+              <i class="fas fa-taxi text-yellow-500 text-2xl mr-2"></i>
+              <span class="text-xl font-bold text-gray-800"
+                >Beijing Taxi Monitor</span
+              >
+            </div>
+          </div>
+          <div class="hidden md:ml-6 md:flex md:items-center md:space-x-8">
+            <a
+              href="#overview"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Overview</a
+            >
+            <a
+              href="#architecture"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Architecture</a
+            >
+            <a
+              href="#flink"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Flink Processing</a
+            >
+            <a
+              href="#redis"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Redis Storage</a
+            >
+            <a
+              href="#commands"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Dev-Commands</a
+            >
+
+            <a
+              href="#dashboard"
+              class="text-gray-700 hover:text-yellow-600 px-3 py-2 rounded-md text-sm font-medium"
+              >Dashboard</a
+            >
+          </div>
+          <div class="-mr-2 flex items-center md:hidden">
+            <button
+              id="mobile-menu-button"
+              class="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 focus:outline-none"
+            >
+              <i class="fas fa-bars"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- Mobile menu -->
+      <div id="mobile-menu" class="hidden md:hidden bg-white border-t">
+        <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+          <a
+            href="#overview"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Overview</a
+          >
+          <a
+            href="#architecture"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Architecture</a
+          >
+          <a
+            href="#flink"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Flink Processing</a
+          >
+          <a
+            href="#redis"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Redis Storage</a
+          >
+          <a
+            href="#commands"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Dec-Commands</a
+          <a
+            href="#dashboard"
+            class="text-gray-700 hover:text-yellow-600 block px-3 py-2 rounded-md text-base font-medium"
+            >Dashboard</a
+          >
+        </div>
+      </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <div class="relative bg-gray-900 overflow-hidden">
+      <div class="max-w-7xl mx-auto">
+        <div
+          class="relative z-10 pb-8 bg-gray-900 sm:pb-16 md:pb-20 lg:max-w-xl lg:w-full lg:pb-28 xl:pb-32"
+        >
+          <main
+            class="mt-10 mx-auto max-w-7xl px-4 sm:mt-12 sm:px-6 md:mt-16 lg:mt-20 lg:px-8 xl:mt-28"
+          >
+            <div class="sm:text-center lg:text-left">
+              <h1
+                class="text-4xl tracking-tight font-extrabold text-white sm:text-5xl md:text-6xl"
+              >
+                <span class="block">Beijing Taxi</span>
+                <span class="block text-yellow-400">Monitoring System</span>
+              </h1>
+              <p
+                class="mt-3 text-base text-gray-300 sm:mt-5 sm:text-lg sm:max-w-xl sm:mx-auto md:mt-5 md:text-xl lg:mx-0"
+              >
+                Real-time processing of 10,000+ taxis with Apache Flink, Kafka,
+                and Redis
+              </p>
+              <div
+                class="mt-5 sm:mt-8 sm:flex sm:justify-center lg:justify-start"
+              >
+                <div class="rounded-md shadow">
+                  <a
+                    href="#architecture"
+                    class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-yellow-600 hover:bg-yellow-700 md:py-4 md:text-lg md:px-10"
+                  >
+                    Explore System
+                  </a>
+                </div>
+                <div class="mt-3 sm:mt-0 sm:ml-3">
+                  <a
+                    href="#dashboard"
+                    class="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-yellow-300 bg-gray-800 hover:bg-gray-700 md:py-4 md:text-lg md:px-10"
+                  >
+                    View Dashboard
+                  </a>
+                </div>
+              </div>
+            </div>
+          </main>
+        </div>
+      </div>
+      <div class="lg:absolute lg:inset-y-0 lg:right-0 lg:w-1/2 hidden md:block">
+        <div
+          class="h-56 w-full bg-gray-800 sm:h-72 md:h-96 lg:w-full lg:h-full flex items-center justify-center"
+        >
+          <div class="relative w-4/5 h-4/5">
+            <div
+              class="absolute inset-0 bg-gray-700 rounded-lg flex items-center justify-center"
+            >
+              <div class="text-center text-white">
+                <div class="text-5xl mb-4 bounce-animation">
+                  <i class="fas fa-project-diagram"></i>
+                </div>
+                <p class="text-xl">Real-time Taxi Monitoring</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Overview Section -->
+    <section id="overview" class="py-12 bg-white">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-yellow-600 font-semibold tracking-wide uppercase"
+          >
+            System Overview
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            Real-time Taxi Monitoring Platform
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            Processing GPS data from 10,537 taxis across Beijing with Apache
+            Flink
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 mb-4">
+                Data Source
+              </h3>
+              <div class="bg-gray-100 p-4 rounded-lg">
+                <div class="flex items-center mb-3">
+                  <i class="fas fa-file-alt text-blue-500 mr-2"></i>
+                  <span class="font-medium">Taxi GPS Data Files</span>
+                </div>
+                <div class="text-sm text-gray-700 mb-4">
+                  <p>
+                    Each taxi has a separate file with timestamped GPS
+                    coordinates:
+                  </p>
+                  <div
+                    class="bg-gray-800 rounded-lg p-3 mt-2 font-mono text-xs text-green-400"
+                  >
+                    <div>1,2008-02-02 15:36:08,116.51172,39.92123</div>
+                    <div>1,2008-02-02 15:46:08,116.51135,39.93883</div>
+                    <div>1,2008-02-02 15:56:08,116.51627,39.91034</div>
+                    <div>...</div>
+                  </div>
+                </div>
+                <div class="flex items-center text-sm text-gray-600">
+                  <i class="fas fa-database mr-2"></i>
+                  <span>10,537 individual taxi files</span>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 mb-4">
+                Key Features
+              </h3>
+              <div class="space-y-4">
+                <div class="flex items-start">
+                  <div
+                    class="flex-shrink-0 h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center"
+                  >
+                    <i class="fas fa-bolt text-blue-500"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-sm font-medium text-gray-900">
+                      Real-time Processing
+                    </h4>
+                    <p class="text-sm text-gray-500">
+                      Processes GPS events with sub-second latency using Apache
+                      Flink
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-start">
+                  <div
+                    class="flex-shrink-0 h-10 w-10 rounded-full bg-green-100 flex items-center justify-center"
+                  >
+                    <i class="fas fa-tachometer-alt text-green-500"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-sm font-medium text-gray-900">
+                      Speed Calculation
+                    </h4>
+                    <p class="text-sm text-gray-500">
+                      Computes real-time speed between consecutive GPS points
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-start">
+                  <div
+                    class="flex-shrink-0 h-10 w-10 rounded-full bg-purple-100 flex items-center justify-center"
+                  >
+                    <i class="fas fa-map-marked-alt text-purple-500"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-sm font-medium text-gray-900">
+                      Geofencing
+                    </h4>
+                    <p class="text-sm text-gray-500">
+                      Monitors taxis within 15km radius of Beijing center
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Architecture Section -->
+    <section id="architecture" class="py-12 bg-gray-50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-blue-600 font-semibold tracking-wide uppercase"
+          >
+            System Architecture
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            End-to-End Data Pipeline
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            How GPS data flows through the system in real-time
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <div class="relative">
+            <!-- Data flow line -->
+            <div
+              class="hidden md:block absolute inset-0 flex items-center"
+              aria-hidden="true"
+            >
+              <div class="w-full border-t border-gray-300"></div>
+            </div>
+            <div
+              class="relative flex flex-col md:flex-row justify-between space-y-8 md:space-y-0"
+            >
+              <!-- Producer -->
+              <div class="flex flex-col items-center">
+                <div
+                  class="flex items-center justify-center h-12 w-12 rounded-md bg-green-500 text-white"
+                >
+                  <i class="fas fa-file-upload text-xl"></i>
+                </div>
+                <div class="mt-5 text-center">
+                  <h3 class="text-lg font-medium text-gray-900">
+                    Data Producer
+                  </h3>
+                  <p class="mt-2 text-base text-gray-500">
+                    Python script processing GPS files
+                  </p>
+                </div>
+              </div>
+
+              <!-- Kafka -->
+              <div class="flex flex-col items-center">
+                <div
+                  class="flex items-center justify-center h-12 w-12 rounded-md bg-orange-500 text-white"
+                >
+                  <i class="fas fa-stream text-xl"></i>
+                </div>
+                <div class="mt-5 text-center">
+                  <h3 class="text-lg font-medium text-gray-900">
+                    Apache Kafka
+                  </h3>
+                  <p class="mt-2 text-base text-gray-500">
+                    Distributed event streaming
+                  </p>
+                </div>
+              </div>
+
+              <!-- Flink -->
+              <div class="flex flex-col items-center">
+                <div
+                  class="flex items-center justify-center h-12 w-12 rounded-md bg-blue-500 text-white"
+                >
+                  <i class="fas fa-bolt text-xl"></i>
+                </div>
+                <div class="mt-5 text-center">
+                  <h3 class="text-lg font-medium text-gray-900">
+                    Apache Flink
+                  </h3>
+                  <p class="mt-2 text-base text-gray-500">
+                    Stream processing engine
+                  </p>
+                </div>
+              </div>
+
+              <!-- Redis -->
+              <div class="flex flex-col items-center">
+                <div
+                  class="flex items-center justify-center h-12 w-12 rounded-md bg-red-500 text-white"
+                >
+                  <i class="fas fa-database text-xl"></i>
+                </div>
+                <div class="mt-5 text-center">
+                  <h3 class="text-lg font-medium text-gray-900">Redis</h3>
+                  <p class="mt-2 text-base text-gray-500">
+                    In-memory data store
+                  </p>
+                </div>
+              </div>
+
+              <!-- Dashboard -->
+              <div class="flex flex-col items-center">
+                <div
+                  class="flex items-center justify-center h-12 w-12 rounded-md bg-purple-500 text-white"
+                >
+                  <i class="fas fa-tachometer-alt text-xl"></i>
+                </div>
+                <div class="mt-5 text-center">
+                  <h3 class="text-lg font-medium text-gray-900">Dashboard</h3>
+                  <p class="mt-2 text-base text-gray-500">
+                    Real-time visualization
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Detailed Architecture Diagram -->
+          <div class="mt-16 bg-white rounded-xl p-6 shadow-md">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">
+              Detailed Data Flow
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <!-- Producer -->
+              <div
+                class="bg-green-50 p-4 rounded-lg border border-green-200 component-card"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-file-upload text-green-600 mr-2"></i>
+                  <h4 class="text-sm font-medium text-green-800">
+                    Data Producer
+                  </h4>
+                </div>
+                <ul class="text-xs text-green-600 space-y-1">
+                  <li>Reads 10,537 taxi data files</li>
+                  <li>Processes in parallel batches</li>
+                  <li>Publishes to Kafka topic</li>
+                  <li>Maintains chronological order</li>
+                </ul>
+                <div id="producerData" class="hidden mt-2 space-y-1">
+                  <div
+                    class="bg-gray-800 rounded p-1 text-xs text-green-400 font-mono"
+                  >
+                    <div>1,2008-02-02 15:36:08,116.51172,39.92123</div>
+                    <div>1,2008-02-02 15:46:08,116.51135,39.93883</div>
+                    <div>2,2008-02-02 15:36:10,116.40123,39.91123</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Kafka -->
+              <!-- Kafka -->
+              <div
+                class="component-kafka bg-orange-50 p-4 rounded-lg border border-orange-200 component-card"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-stream text-orange-600 mr-2"></i>
+                  <h4 class="text-sm font-medium text-orange-800">
+                    Kafka Cluster
+                  </h4>
+                </div>
+                <ul class="text-xs text-orange-600 space-y-1">
+                  <li>Topic: taxi-locations</li>
+                  <li>High throughput (15k msg/sec)</li>
+                  <li>Partitioned by taxi_id</li>
+                  <li>Watermark events</li>
+                </ul>
+                <div
+                  id="kafkaTopic"
+                  class="hidden mt-2 text-xs bg-orange-200 rounded px-2 py-1 text-orange-800 overflow-x-auto"
+                >
+                  taxi-locations
+                </div>
+                <div
+                  id="kafkaMessages"
+                  class="hidden mt-2 space-y-1 overflow-x-auto"
+                >
+                  <div
+                    class="bg-orange-100 rounded p-1 text-xs font-mono whitespace-nowrap"
+                  >
+                    {"taxi_id":1,"timestamp":"2008-02-02
+                    15:36:08","lon":116.51172,"lat":39.92123}
+                  </div>
+                  <div
+                    class="bg-orange-100 rounded p-1 text-xs font-mono whitespace-nowrap"
+                  >
+                    {"taxi_id":1,"timestamp":"2008-02-02
+                    15:46:08","lon":116.51135,"lat":39.93883}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Flink -->
+              <div
+                class="component-flink bg-blue-50 p-4 rounded-lg border border-blue-200 component-card"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-bolt text-blue-600 mr-2"></i>
+                  <h4 class="text-sm font-medium text-blue-800">Flink Job</h4>
+                </div>
+                <ul class="text-xs text-blue-600 space-y-1">
+                  <li>Kafka source connector</li>
+                  <li>KeyedProcessFunction per taxi</li>
+                  <li>Stateful computations</li>
+                  <li>Side outputs for alerts</li>
+                </ul>
+                <div id="flinkCalculations" class="hidden mt-2 space-y-1">
+                  <div class="bg-blue-100 rounded p-1 text-xs">
+                    <span class="font-medium">Speed:</span> 45.2 km/h
+                  </div>
+                  <div class="bg-blue-100 rounded p-1 text-xs">
+                    <span class="font-medium">Distance:</span> 12.4 km
+                  </div>
+                  <div class="bg-blue-100 rounded p-1 text-xs">
+                    <span class="font-medium">Avg Speed:</span> 42.5 km/h
+                  </div>
+                </div>
+                <div
+                  id="flinkAlert"
+                  class="hidden mt-2 bg-red-100 rounded p-1 text-xs text-red-800"
+                >
+                  <i class="fas fa-exclamation-triangle mr-1"></i> Zone alert:
+                  Taxi left monitored area
+                </div>
+              </div>
+
+              <!-- Redis -->
+              <div
+                class="component-redis bg-red-50 p-4 rounded-lg border border-red-200 component-card"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-database text-red-600 mr-2"></i>
+                  <h4 class="text-sm font-medium text-red-800">Redis Store</h4>
+                </div>
+                <ul class="text-xs text-red-600 space-y-1">
+                  <li>Hashes for current locations</li>
+                  <li>Sorted sets for active taxis</li>
+                  <li>Lists for trajectories</li>
+                  <li>TTL for auto-cleanup</li>
+                </ul>
+                <div id="redisData" class="hidden mt-2 space-y-1">
+                  <div class="bg-red-100 rounded p-1 text-xs font-mono">
+                    HSET location:1 lat 39.92123 lon 116.51172 speed 45.2
+                  </div>
+                  <div class="bg-red-100 rounded p-1 text-xs font-mono">
+                    ZADD taxi:active 1204567890 1
+                  </div>
+                </div>
+              </div>
+              <!-- Development Commands Section -->
+
+              <!-- Dashboard -->
+              <div
+                class="component-dash bg-purple-50 p-4 rounded-lg border border-purple-200 component-card"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-tachometer-alt text-purple-600 mr-2"></i>
+                  <h4 class="text-sm font-medium text-purple-800">Dashboard</h4>
+                </div>
+                <ul class="text-xs text-purple-600 space-y-1">
+                  <li>Real-time updates</li>
+                  <li>Interactive map</li>
+                  <li>Alert notifications</li>
+                  <li>Historical analysis</li>
+                </ul>
+                <div id="dashboardData" class="hidden mt-2 space-y-1">
+                  <div class="bg-purple-100 rounded p-1 text-xs">
+                    <span class="font-medium">Avg Speed Zone:</span> 42.5 km/h
+                  </div>
+                  <div class="bg-purple-100 rounded p-1 text-xs">
+                    <span class="font-medium">Distance Travelled:</span> 12.4 km
+                  </div>
+                  <div class="bg-purple-100 rounded p-1 text-xs">
+                    <span class="font-medium">Active Taxis:</span> 3
+                  </div>
+                  <div class="bg-purple-100 rounded p-1 text-xs text-red-600">
+                    <i class="fas fa-exclamation-triangle mr-1"></i> Zone Alert:
+                    Taxi #3 left monitored area
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Data Flow Animation -->
+            <div
+              class="mt-6 relative h-12 bg-gray-100 rounded-lg overflow-hidden"
+            >
+              <div
+                id="data-particle"
+                class="data-particle absolute left-0 top-1/2 transform -translate-y-1/2 w-3 h-3 bg-indigo-500 rounded-full opacity-0"
+              ></div>
+            </div>
+
+            <div class="mt-4 flex justify-center">
+              <button
+                id="play-flow"
+                class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+              >
+                <i class="fas fa-play mr-1"></i> Visualize Data Flow
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Flink Processing Section -->
+    <section id="flink" class="py-12 bg-white">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-blue-600 font-semibold tracking-wide uppercase"
+          >
+            Stream Processing
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            Apache Flink Job Details
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            Real-time computation of taxi metrics and alerts
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 mb-4">
+                MainJob.java Structure
+              </h3>
+
+              <div class="bg-gray-100 rounded-lg p-4 mb-6">
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-file-code text-blue-500 mr-2"></i>
+                  <span class="font-medium">com.a6.taxi.operators.MainJob</span>
+                </div>
+                <div class="text-sm text-gray-700 space-y-2">
+                  <div class="flex items-start">
+                    <div
+                      class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs mr-2"
+                    >
+                      Source
+                    </div>
+                    <span>KafkaSource with TaxiLocationDeserializer</span>
+                  </div>
+                  <div class="flex items-start">
+                    <div
+                      class="bg-green-100 text-green-800 px-2 py-1 rounded text-xs mr-2"
+                    >
+                      Process
+                    </div>
+                    <span>KeyedProcessFunction per taxi_id</span>
+                  </div>
+                  <div class="flex items-start">
+                    <div
+                      class="bg-purple-100 text-purple-800 px-2 py-1 rounded text-xs mr-2"
+                    >
+                      Sink
+                    </div>
+                    <span>RedisSink for metrics storage</span>
+                  </div>
+                </div>
+              </div>
+
+              <h4 class="text-md font-medium text-gray-900 mb-2">
+                Key Operators
+              </h4>
+              <div class="space-y-4">
+                <div
+                  class="bg-white p-4 rounded-lg shadow-sm border border-gray-200"
+                >
+                  <div class="flex items-center mb-2">
+                    <i class="fas fa-tachometer-alt text-green-500 mr-2"></i>
+                    <h5 class="text-sm font-medium">SpeedCalculator</h5>
+                  </div>
+                  <p class="text-xs text-gray-600">
+                    Calculates speed between consecutive GPS points using
+                    Haversine formula and time difference
+                  </p>
+                </div>
+                <div
+                  class="bg-white p-4 rounded-lg shadow-sm border border-gray-200"
+                >
+                  <div class="flex items-center mb-2">
+                    <i class="fas fa-chart-line text-blue-500 mr-2"></i>
+                    <h5 class="text-sm font-medium">AverageSpeedCalculator</h5>
+                  </div>
+                  <p class="text-xs text-gray-600">
+                    Maintains running average of speed for each taxi using
+                    ValueState
+                  </p>
+                </div>
+                <div
+                  class="bg-white p-4 rounded-lg shadow-sm border border-gray-200"
+                >
+                  <div class="flex items-center mb-2">
+                    <i class="fas fa-route text-purple-500 mr-2"></i>
+                    <h5 class="text-sm font-medium">DistanceTracker</h5>
+                  </div>
+                  <p class="text-xs text-gray-600">
+                    Accumulates total distance traveled by each taxi
+                  </p>
+                </div>
+                <div
+                  class="bg-white p-4 rounded-lg shadow-sm border border-gray-200"
+                >
+                  <div class="flex items-center mb-2">
+                    <i
+                      class="fas fa-exclamation-triangle text-red-500 mr-2"
+                    ></i>
+                    <h5 class="text-sm font-medium">ZoneExitNotifier</h5>
+                  </div>
+                  <p class="text-xs text-gray-600">
+                    Detects when taxis leave monitored area (15km from Beijing
+                    center)
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 mb-4">
+                State Management
+              </h3>
+
+              <div class="bg-gray-100 rounded-lg p-4 mb-4">
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-save text-blue-500 mr-2"></i>
+                  <span class="font-medium">State Types</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <div class="bg-blue-50 p-2 rounded text-xs">
+                    <div class="font-medium">ValueState</div>
+                    <div class="text-blue-600">Previous location</div>
+                  </div>
+                  <div class="bg-green-50 p-2 rounded text-xs">
+                    <div class="font-medium">AggregatingState</div>
+                    <div class="text-green-600">Average speed</div>
+                  </div>
+                  <div class="bg-purple-50 p-2 rounded text-xs">
+                    <div class="font-medium">ListState</div>
+                    <div class="text-purple-600">Trajectory points</div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="bg-yellow-50 rounded-lg p-4 mb-4 border border-yellow-200 state-ttl"
+              >
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-hourglass-half text-yellow-600 mr-2"></i>
+                  <span class="font-medium">State TTL Configuration</span>
+                </div>
+                <div class="text-xs text-yellow-700">
+                  <p>
+                    State automatically expires after 5 minutes of inactivity
+                  </p>
+                  <div
+                    class="bg-gray-800 rounded p-2 mt-2 font-mono text-yellow-300"
+                  >
+                    <div>StateTtlConfig.newBuilder(Time.minutes(5))</div>
+                    <div>.setUpdateType(OnCreateAndWrite)</div>
+                    <div>.setStateVisibility(NeverReturnExpired)</div>
+                    <div>.cleanupInRocksdbCompactFilter(1000)</div>
+                    <div>.build();</div>
+                  </div>
+                </div>
+              </div>
+
+              <h4 class="text-md font-medium text-gray-900 mb-2">
+                Haversine Distance Calculation
+              </h4>
+              <div class="bg-gray-100 rounded-lg p-4">
+                <div class="flex items-center mb-2">
+                  <i class="fas fa-ruler-combined text-blue-500 mr-2"></i>
+                  <span class="font-medium">Haversine.java</span>
+                </div>
+                <div
+                  class="bg-gray-800 rounded p-2 font-mono text-xs text-green-400"
+                >
+                  <div>public static double computeDistance(</div>
+                  <div>double lat1, double lon1,</div>
+                  <div>double lat2, double lon2) {</div>
+                  <div>double latDiffRad = Math.toRadians(lat2-lat1);</div>
+                  <div>double lonDiffRad = Math.toRadians(lon2-lon1);</div>
+                  <div>
+                    double a = Math.sin(latDiffRad/2) * Math.sin(latDiffRad/2) +
+                  </div>
+                  <div>
+                    Math.cos(Math.toRadians(lat1)) *
+                    Math.cos(Math.toRadians(lat2)) *
+                  </div>
+                  <div>Math.sin(lonDiffRad/2) * Math.sin(lonDiffRad/2);</div>
+                  <div>
+                    double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                  </div>
+                  <div>return EARTH_RADIUS_KM * c; // 6371 km</div>
+                  <div>}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Alert System -->
+          <div class="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
+            <div class="bg-gray-800 text-white px-4 py-3">
+              <h3 class="text-lg font-medium">Alert System Implementation</h3>
+            </div>
+            <div class="p-4">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <h4 class="text-sm font-medium text-gray-900 mb-2">
+                    Speed Alert
+                  </h4>
+                  <div class="bg-red-50 p-3 rounded-lg border border-red-200">
+                    <div class="flex items-center mb-1">
+                      <i class="fas fa-tachometer-alt text-red-500 mr-2"></i>
+                      <span class="text-xs font-medium"
+                        >Threshold: 50 km/h</span
+                      >
+                    </div>
+                    <div
+                      class="bg-gray-800 rounded p-2 font-mono text-xs text-green-400"
+                    >
+                      <div>if (speed > MAX_SPEED_KMH) {</div>
+                      <div>context.output(SPEED_ALERTS,</div>
+                      <div>
+                        "⚠️ Speed alert for Taxi " + current.getTaxiId() +
+                      </div>
+                      <div>": " + String.format("%.2f", speed) + " km/h");</div>
+                      <div>}</div>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <h4 class="text-sm font-medium text-gray-900 mb-2">
+                    Zone Alert
+                  </h4>
+                  <div
+                    class="bg-yellow-50 p-3 rounded-lg border border-yellow-200"
+                  >
+                    <div class="flex items-center mb-1">
+                      <i class="fas fa-map-marked-alt text-yellow-500 mr-2"></i>
+                      <span class="text-xs font-medium"
+                        >Radius: 15km from center</span
+                      >
+                    </div>
+                    <div
+                      class="bg-gray-800 rounded p-2 font-mono text-xs text-green-400"
+                    >
+                      <div>double distance = Haversine.computeDistance(</div>
+                      <div>CENTER_LAT, CENTER_LON,</div>
+                      <div>
+                        location.getLatitude(), location.getLongitude());
+                      </div>
+                      <div>if (distance > WARNING_RADIUS) {</div>
+                      <div>context.output(ZONE_ALERTS, alert);</div>
+                      <div>}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Redis Storage Section -->
+    <section id="redis" class="py-12 bg-gray-50">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-red-600 font-semibold tracking-wide uppercase"
+          >
+            Data Storage
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            Redis Data Structures
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            Optimized for low-latency real-time access
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Current Locations -->
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <div class="flex items-center mb-3">
+                <i class="fas fa-map-marker-alt text-red-500 text-xl mr-2"></i>
+                <h3 class="text-lg font-medium text-gray-900">
+                  Current Locations
+                </h3>
+              </div>
+              <p class="text-sm text-gray-600 mb-4">
+                Stored as Redis Hashes with TTL (5 minutes)
+              </p>
+              <div
+                class="bg-gray-900 rounded-lg p-3 font-mono text-xs text-green-400"
+              >
+                <div>HSET location:1001</div>
+                <div class="ml-4">lat "39.915"</div>
+                <div class="ml-4">lon "116.404"</div>
+                <div class="ml-4">time "2008-02-02 15:36:08"</div>
+                <div class="ml-4">speed "45.2"</div>
+                <div class="mt-2">EXPIRE location:1001 300</div>
+              </div>
+            </div>
+
+            <!-- Metrics -->
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <div class="flex items-center mb-3">
+                <i class="fas fa-chart-bar text-red-500 text-xl mr-2"></i>
+                <h3 class="text-lg font-medium text-gray-900">Taxi Metrics</h3>
+              </div>
+              <p class="text-sm text-gray-600 mb-4">
+                Stored in Redis Hashes for fast access
+              </p>
+              <div
+                class="bg-gray-900 rounded-lg p-3 font-mono text-xs text-green-400"
+              >
+                <div>HSET metrics:speed</div>
+                <div class="ml-4">1001 "45.2"</div>
+                <div class="ml-4">1002 "32.5"</div>
+                <div class="ml-4">1003 "28.7"</div>
+                <div class="mt-2">HSET metrics:distance</div>
+                <div class="ml-4">1001 "12.5"</div>
+                <div class="ml-4">1002 "8.3"</div>
+              </div>
+            </div>
+
+            <!-- Active Taxis -->
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <div class="flex items-center mb-3">
+                <i class="fas fa-list-ol text-red-500 text-xl mr-2"></i>
+                <h3 class="text-lg font-medium text-gray-900">Active Taxis</h3>
+              </div>
+              <p class="text-sm text-gray-600 mb-4">
+                Sorted Set with timestamp as score
+              </p>
+              <div
+                class="bg-gray-900 rounded-lg p-3 font-mono text-xs text-green-400"
+              >
+                <div>ZADD taxi:active</div>
+                <div class="ml-4">1204567890 "1001"</div>
+                <div class="ml-4">1204567891 "1002"</div>
+                <div class="ml-4">1204567892 "1003"</div>
+                <div class="mt-2">ZREMRANGEBYSCORE</div>
+                <div class="ml-4">taxi:active -inf (now-300)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Redis Sink Implementation -->
+          <div class="mt-8 bg-white rounded-xl shadow-md overflow-hidden">
+            <div class="bg-gray-800 text-white px-4 py-3">
+              <h3 class="text-lg font-medium">RedisSink.java Implementation</h3>
+            </div>
+            <div class="p-4">
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <h4 class="text-sm font-medium text-gray-900 mb-2">
+                    Optimizations
+                  </h4>
+                  <ul class="text-xs text-gray-700 space-y-2">
+                    <li class="flex items-start">
+                      <i class="fas fa-bolt text-yellow-500 mt-0.5 mr-2"></i>
+                      <span>Pipelined writes for batch operations</span>
+                    </li>
+                    <li class="flex items-start">
+                      <i class="fas fa-clock text-blue-500 mt-0.5 mr-2"></i>
+                      <span>5 minute TTL for all location data</span>
+                    </li>
+                    <li class="flex items-start">
+                      <i
+                        class="fas fa-layer-group text-green-500 mt-0.5 mr-2"
+                      ></i>
+                      <span>Asynchronous writer thread with queue</span>
+                    </li>
+                    <li class="flex items-start">
+                      <i class="fas fa-retweet text-purple-500 mt-0.5 mr-2"></i>
+                      <span>Automatic retry on connection failures</span>
+                    </li>
+                  </ul>
+                </div>
+                <div>
+                  <h4 class="text-sm font-medium text-gray-900 mb-2">
+                    Data Structures
+                  </h4>
+                  <div class="bg-gray-100 p-3 rounded-lg">
+                    <div class="text-xs text-gray-800 space-y-1">
+                      <div class="flex items-center">
+                        <div class="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
+                        <span>location:&lt;taxi_id&gt; - Hash</span>
+                      </div>
+                      <div class="flex items-center">
+                        <div
+                          class="w-3 h-3 bg-blue-500 rounded-full mr-2"
+                        ></div>
+                        <span>metrics:speed - Hash</span>
+                      </div>
+                      <div class="flex items-center">
+                        <div
+                          class="w-3 h-3 bg-green-500 rounded-full mr-2"
+                        ></div>
+                        <span>metrics:distance - Hash</span>
+                      </div>
+                      <div class="flex items-center">
+                        <div
+                          class="w-3 h-3 bg-purple-500 rounded-full mr-2"
+                        ></div>
+                        <span>taxi:active - Sorted Set</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                class="mt-4 bg-gray-800 rounded-lg p-3 font-mono text-xs text-green-400 overflow-x-auto"
+              >
+                <div>// Process record in Redis pipeline</div>
+                <div>
+                  private void processRecord(Pipeline pipelined, T input) {
+                </div>
+                <div>
+                  long currentTimeSeconds = System.currentTimeMillis() / 1000;
+                </div>
+                <div></div>
+                <div>if (input instanceof TaxiLocation) {</div>
+                <div>TaxiLocation location = (TaxiLocation) input;</div>
+                <div>
+                  String locationKey = "location:" + location.getTaxiId();
+                </div>
+                <div></div>
+                <div>// Store current location with expiration</div>
+                <div>
+                  pipelined.hset(locationKey, "lat",
+                  String.valueOf(location.getLatitude()));
+                </div>
+                <div>
+                  pipelined.hset(locationKey, "lon",
+                  String.valueOf(location.getLongitude()));
+                </div>
+                <div>
+                  pipelined.hset(locationKey, "time", location.getTimestamp());
+                </div>
+                <div>pipelined.expire(locationKey, LOCATION_TTL_SECONDS);</div>
+                <div>}</div>
+                <div>}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="commands" class="py-12 bg-gray-100">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-indigo-600 font-semibold tracking-wide uppercase"
+          >
+            Development
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            Development & Operations Commands
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            Essential commands for building, deploying and monitoring the system
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <div class="bg-white shadow-xl rounded-lg overflow-hidden">
+            <!-- Tabs -->
+            <div class="border-b border-gray-200">
+            <nav class="flex -mb-px">
+              <button data-tab="build" class="tab-button active py-4 px-6 border-b-2 font-medium text-sm border-indigo-500 text-indigo-600">
+                Build
+              </button>
+              <button data-tab="kafka" class="tab-button py-4 px-6 border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                Kafka
+              </button>
+              <button data-tab="flink" class="tab-button py-4 px-6 border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                Flink
+              </button>
+              <button data-tab="redis" class="tab-button py-4 px-6 border-b-2 font-medium text-sm border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300">
+                Redis
+              </button>
+            </nav>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="p-6">
+              <!-- Build Commands -->
+              <div id="build-tab" class="tab-content active">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">
+                  Build Project Using Dockerized Maven
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">
+                  Build the Java project using a temporary Maven container.
+                </p>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    Windows (run from project root):
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker run -it --rm ^
+      -v "%cd%\taxi_locations\consumer\taxi_flink:/app" ^
+      -w /app ^
+      maven:3.8.6-eclipse-temurin-17 ^
+      mvn clean package</code></pre>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    macOS/Linux (run from project root):
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker run -it --rm \
+      -v "$(pwd)/taxi_locations/consumer/taxi_flink:/app" \
+      -w /app \
+      maven:3.8.6-eclipse-temurin-17 \
+      mvn clean package</code></pre>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Kafka Commands -->
+              <div id="kafka-tab" class="tab-content hidden">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">
+                  Kafka Topic Management
+                </h3>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    List Kafka Topics:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker exec -it kafka kafka-topics --bootstrap-server localhost:9092 --list</code></pre>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    View Messages in a Kafka Topic:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker exec -it kafka kafka-console-consumer \
+      --bootstrap-server localhost:9092 \
+      --topic taxi-locations \
+      --from-beginning \
+      --max-messages 5</code></pre>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Flink Commands -->
+             <div id="flink-tab" class="tab-content hidden">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">
+                  Flink: Deploying and Scheduling Jobs
+                </h3>
+                <p class="text-sm text-gray-600 mb-4">
+                  Run from one level under root (i.e., inside
+                  <code class="bg-gray-200 px-1 rounded">taxi_locations/</code>)
+                </p>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    Copy Compiled JAR to Flink JobManager:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker cp consumer/taxi_flink/target/taxi_locations-1.jar flink-jobmanager:/opt/flink</code></pre>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    Submit Job to Flink:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker exec flink-jobmanager flink run -d /opt/flink/taxi_locations-1.jar</code></pre>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Redis Commands -->
+              <div id="redis-tab" class="tab-content hidden">
+                <h3 class="text-lg font-medium text-gray-900 mb-4">
+                  Redis: Inspecting Metrics and Location Data
+                </h3>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    Start Redis CLI:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>docker exec -it redis redis-cli</code></pre>
+                  </div>
+                </div>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    View All Keys:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>KEYS *</code></pre>
+                  </div>
+                </div>
+
+                <div class="mb-6">
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    View Metrics:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>HGETALL metrics:speed
+    HGETALL metrics:avgSpeed
+    HGETALL metrics:distance</code></pre>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-md font-medium text-gray-800 mb-2">
+                    View Specific Location Data:
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-4 overflow-x-auto">
+                    <pre
+                      class="text-green-400 text-sm font-mono"
+                    ><code>HGETALL location:534
+    HGETALL location:8717
+    HGETALL location:7630
+    HGETALL location:6211</code></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      // Tab functionality
+      document.addEventListener('DOMContentLoaded', function() {
+      const tabs = document.querySelectorAll('[data-tab]');
+      
+      tabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+          // Remove active classes from all tabs and content
+          tabs.forEach(t => {
+            t.classList.remove('active', 'border-indigo-500', 'text-indigo-600');
+            t.classList.add('border-transparent', 'text-gray-500');
+          });
+          
+          // Hide all tab contents
+          document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.add('hidden');
+          });
+          
+          // Add active classes to clicked tab
+          this.classList.add('active', 'border-indigo-500', 'text-indigo-600');
+          this.classList.remove('border-transparent', 'text-gray-500');
+          
+          // Show corresponding content
+          const tabId = this.getAttribute('data-tab') + '-tab';
+          document.getElementById(tabId).classList.remove('hidden');
+        });
+      });
+    });
+    </script>
+    <!-- Dashboard Section -->
+    <section id="dashboard" class="py-12 bg-white">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="lg:text-center">
+          <h2
+            class="text-base text-purple-600 font-semibold tracking-wide uppercase"
+          >
+            Visualization
+          </h2>
+          <p
+            class="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl"
+          >
+            Pseudo Implementation of Real-time Monitoring Dashboard
+          </p>
+          <p class="mt-4 max-w-2xl text-xl text-gray-500 lg:mx-auto">
+            Interactive visualization of taxi movements and alerts
+          </p>
+        </div>
+
+        <div class="mt-10">
+          <!-- Dashboard Mockup -->
+          <div class="bg-gray-800 rounded-xl shadow-xl overflow-hidden">
+            <!-- Dashboard Header -->
+            <div
+              class="bg-gray-900 text-white px-4 py-3 flex justify-between items-center"
+            >
+              <div class="flex items-center">
+                <i class="fas fa-taxi text-yellow-400 mr-2"></i>
+                <h3 class="text-lg font-medium">Beijing Taxi Monitoring</h3>
+              </div>
+              <div class="flex items-center space-x-2">
+                <span
+                  class="text-xs bg-green-500 px-2 py-1 rounded-full flex items-center"
+                >
+                  <span
+                    class="w-2 h-2 bg-white rounded-full mr-1 pulse-animation"
+                  ></span>
+                  Live
+                </span>
+                <span class="text-xs text-gray-400" id="dashboard-time"
+                  >08:00:00</span
+                >
+              </div>
+            </div>
+
+            <!-- Dashboard Content -->
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-0">
+              <!-- Main Map -->
+              <div class="lg:col-span-3 bg-gray-700 p-4">
+                <div
+                  class="relative h-64 md:h-96 bg-gray-800 rounded-lg overflow-hidden"
+                  id="dashboard-map"
+                >
+                  <!-- Beijing map background -->
+                  <div
+                    class="absolute inset-0 bg-gray-900 flex items-center justify-center"
+                  >
+                    <div class="text-gray-700 text-center">
+                      <i class="fas fa-map-marked-alt text-4xl mb-2"></i>
+                      <p>Beijing City Map</p>
+                    </div>
+                  </div>
+
+                  <!-- Geofence boundary -->
+                  <svg class="absolute inset-0 w-full h-full">
+                    <circle
+                      cx="50%"
+                      cy="50%"
+                      r="40%"
+                      fill="rgba(59, 130, 246, 0.1)"
+                      stroke="rgba(59, 130, 246, 0.8)"
+                      stroke-width="2"
+                      class="geofence"
+                    />
+                    <circle
+                      cx="50%"
+                      cy="50%"
+                      r="30%"
+                      fill="none"
+                      stroke="rgba(234, 179, 8, 0.5)"
+                      stroke-width="2"
+                      stroke-dasharray="5,5"
+                    />
+                  </svg>
+
+                  <!-- Center marker -->
+                  <div
+                    class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-blue-600 rounded-full border-2 border-white"
+                  ></div>
+
+                  <!-- Taxi icons -->
+                  <div
+                    id="d-taxi-1001"
+                    class="taxi-icon absolute w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg"
+                    style="left: 40%; top: 45%"
+                  >
+                    <i class="fas fa-taxi"></i>
+                  </div>
+                  <div
+                    id="d-taxi-1002"
+                    class="taxi-icon absolute w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg"
+                    style="left: 60%; top: 35%"
+                  >
+                    <i class="fas fa-taxi"></i>
+                  </div>
+                  <div
+                    id="d-taxi-1003"
+                    class="taxi-icon absolute w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center text-xs font-bold text-white shadow-lg"
+                    style="left: 30%; top: 60%"
+                  >
+                    <i class="fas fa-taxi"></i>
+                  </div>
+
+                  <!-- Selected taxi highlight -->
+                  <div
+                    id="d-selected-highlight"
+                    class="absolute w-10 h-10 rounded-full border-2 border-blue-400 opacity-0"
+                    style="left: 40%; top: 45%"
+                  ></div>
+
+                  <!-- Trajectory lines -->
+                  <svg class="absolute inset-0 w-full h-full">
+                    <path
+                      id="d-trajectory-1001"
+                      d="M40,45 L45,44 L50,43 L55,42"
+                      stroke="rgba(234, 179, 8, 0.7)"
+                      stroke-width="2"
+                      fill="none"
+                    />
+                  </svg>
+
+                  <!-- Alert indicators -->
+                  <div
+                    id="d-speed-alert"
+                    class="absolute hidden top-4 right-4 bg-red-500 text-white text-xs px-3 py-1 rounded-full shadow-lg"
+                  >
+                    <i class="fas fa-exclamation-triangle mr-1"></i> Speed
+                    Alert: 82 km/h
+                  </div>
+                  <div
+                    id="d-zone-alert"
+                    class="absolute hidden top-4 left-4 bg-yellow-500 text-white text-xs px-3 py-1 rounded-full shadow-lg"
+                  >
+                    <i class="fas fa-map-marker-alt mr-1"></i> Taxi left
+                    monitored area
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sidebar -->
+              <div class="bg-gray-900 text-white p-4 overflow-y-auto">
+                <div class="mb-6">
+                  <h4 class="text-sm font-medium text-gray-300 mb-2">
+                    System Metrics
+                  </h4>
+                  <div class="space-y-3">
+                    <div>
+                      <div
+                        class="flex justify-between text-xs text-gray-400 mb-1"
+                      >
+                        <span>Active Taxis</span>
+                        <span id="d-active-taxis">3</span>
+                      </div>
+                      <div
+                        class="h-1 w-full bg-gray-700 rounded-full overflow-hidden"
+                      >
+                        <div
+                          class="h-full bg-green-500 rounded-full"
+                          style="width: 60%"
+                        ></div>
+                      </div>
+                    </div>
+                    <div>
+                      <div
+                        class="flex justify-between text-xs text-gray-400 mb-1"
+                      >
+                        <span>Total Distance</span>
+                        <span id="d-total-distance">1,248 km</span>
+                      </div>
+                      <div
+                        class="h-1 w-full bg-gray-700 rounded-full overflow-hidden"
+                      >
+                        <div
+                          class="h-full bg-blue-500 rounded-full"
+                          style="width: 45%"
+                        ></div>
+                      </div>
+                    </div>
+                    <div>
+                      <div
+                        class="flex justify-between text-xs text-gray-400 mb-1"
+                      >
+                        <span>Avg Speed</span>
+                        <span id="d-avg-speed">42.5 km/h</span>
+                      </div>
+                      <div
+                        class="h-1 w-full bg-gray-700 rounded-full overflow-hidden"
+                      >
+                        <div
+                          class="h-full bg-purple-500 rounded-full"
+                          style="width: 65%"
+                        ></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mb-6">
+                  <h4 class="text-sm font-medium text-gray-300 mb-2">
+                    Recent Alerts
+                  </h4>
+                  <div class="space-y-2">
+                    <div
+                      class="bg-red-900/50 text-xs p-2 rounded border-l-4 border-red-500"
+                    >
+                      <div class="flex justify-between">
+                        <span class="font-medium">Speed Alert</span>
+                        <span class="text-gray-300">08:02:15</span>
+                      </div>
+                      <div class="mt-1 text-gray-300">Taxi #1001: 82 km/h</div>
+                    </div>
+                    <div
+                      class="bg-yellow-900/50 text-xs p-2 rounded border-l-4 border-yellow-500"
+                    >
+                      <div class="flex justify-between">
+                        <span class="font-medium">Zone Alert</span>
+                        <span class="text-gray-300">08:01:30</span>
+                      </div>
+                      <div class="mt-1 text-gray-300">
+                        Taxi #1003 left monitored area
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 class="text-sm font-medium text-gray-300 mb-2">
+                    Taxi Details
+                  </h4>
+                  <div class="bg-gray-800 rounded-lg p-3">
+                    <div class="flex items-center mb-2">
+                      <div
+                        class="w-3 h-3 bg-yellow-500 rounded-full mr-2"
+                      ></div>
+                      <span class="text-xs font-medium" id="d-selected-taxi"
+                        >Taxi #1001</span
+                      >
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                      <div>
+                        <div class="font-medium">Speed</div>
+                        <div id="d-taxi-speed">45.2 km/h</div>
+                      </div>
+                      <div>
+                        <div class="font-medium">Status</div>
+                        <div id="d-taxi-status">In Zone</div>
+                      </div>
+                      <div>
+                        <div class="font-medium">Last Update</div>
+                        <div id="d-taxi-update">08:00:00</div>
+                      </div>
+                      <div>
+                        <div class="font-medium">Location</div>
+                        <div id="d-taxi-location">39.915, 116.404</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dashboard Controls -->
+          <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <h4 class="text-sm font-medium text-gray-900 mb-3">
+                Data Polling
+              </h4>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-gray-600">Refresh Interval</span>
+                <span class="text-xs font-bold text-purple-600">5 second</span>
+              </div>
+              <div class="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-purple-500 rounded-full"
+                  style="width: 100%"
+                ></div>
+              </div>
+              <div class="mt-3 text-xs text-gray-500">
+                <i class="fas fa-info-circle mr-1"></i> Dashboard polls Redis
+                for updates every second
+              </div>
+            </div>
+
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <h4 class="text-sm font-medium text-gray-900 mb-3">
+                Trajectory Smoothing
+              </h4>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-gray-600">Interpolation</span>
+                <span class="text-xs font-bold text-blue-600"
+                  >Linear Interpolation</span
+                >
+              </div>
+              <div class="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-blue-500 rounded-full"
+                  style="width: 70%"
+                ></div>
+              </div>
+              <div class="mt-3 text-xs text-gray-500">
+                <i class="fas fa-info-circle mr-1"></i> Raw GPS points are
+                smoothed for better visualization
+              </div>
+            </div>
+
+            <div class="bg-white p-4 rounded-lg shadow-md">
+              <h4 class="text-sm font-medium text-gray-900 mb-3">
+                Alert Notification
+              </h4>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-gray-600">Delivery Latency</span>
+                <span class="text-xs font-bold text-green-600">&lt; 500ms</span>
+              </div>
+              <div class="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-green-500 rounded-full"
+                  style="width: 30%"
+                ></div>
+              </div>
+              <div class="mt-3 text-xs text-gray-500">
+                <i class="fas fa-info-circle mr-1"></i> Alerts appear on
+                dashboard within half a second
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-8">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div>
+            <h3 class="text-lg font-medium mb-4">Beijing Taxi Monitoring</h3>
+            <p class="text-sm text-gray-400">
+              A real-time big data processing system tracking thousands of taxis
+              across Beijing.
+            </p>
+          </div>
+          <div>
+            <h3 class="text-lg font-medium mb-4">Technology Stack</h3>
+            <ul class="text-sm text-gray-400 space-y-2">
+              <li>Apache Kafka - Distributed Event Streaming</li>
+              <li>Apache Flink - Stream Processing</li>
+              <li>Redis - In-memory Data Store</li>
+              <li>Dash/Plotly - Real-time Visualization</li>
+            </ul>
+          </div>
+          <div>
+            <h3 class="text-lg font-medium mb-4">Team: A6</h3>
+            <ul class="text-sm text-gray-400 space-y-2">
+              <li>Parthav Pillai</li>
+              <li>Sunmeet Kohli</li>
+              <li>Sanika Acharya</li>
+              <li>Matthew Ayodele</li>
+            </ul>
+          </div>
+        </div>
+        <div
+          class="mt-8 pt-8 border-t border-gray-800 text-center text-sm text-gray-400"
+        >
+          
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      // Mobile menu toggle
+      document
+        .getElementById("mobile-menu-button")
+        .addEventListener("click", function () {
+          const menu = document.getElementById("mobile-menu");
+          menu.classList.toggle("hidden");
+        });
+
+      // Smooth scrolling for navigation
+      document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+        anchor.addEventListener("click", function (e) {
+          e.preventDefault();
+          document.querySelector(this.getAttribute("href")).scrollIntoView({
+            behavior: "smooth",
+          });
+
+          // Close mobile menu if open
+          const mobileMenu = document.getElementById("mobile-menu");
+          mobileMenu.classList.add("hidden");
+        });
+      });
+
+      // Data flow animation
+      let animationInterval;
+      const playBtn = document.getElementById("play-flow");
+      const dataParticle = document.getElementById("data-particle");
+
+      function startAnimation() {
+        // Reset all components
+        document.getElementById("producerData").classList.add("hidden");
+        document.getElementById("kafkaTopic").classList.add("hidden");
+        document.getElementById("kafkaMessages").classList.add("hidden");
+        document.getElementById("flinkCalculations").classList.add("hidden");
+        document.getElementById("flinkAlert").classList.add("hidden");
+        document.getElementById("redisData").classList.add("hidden");
+        document.getElementById("dashboardData").classList.add("hidden");
+
+        // Show producer data first
+        gsap.to("#producerData", {
+          duration: 0.5,
+          display: "block",
+          opacity: 1,
+        });
+
+        // Animate data particle moving to Kafka
+        gsap.to(dataParticle, {
+          duration: 1,
+          left: "20%",
+          opacity: 1,
+          ease: "power2.inOut",
+          delay: 1,
+          onComplete: () => {
+            // Show Kafka topic
+            gsap.to("#kafkaTopic", {
+              duration: 0.5,
+              display: "inline-block",
+              opacity: 1,
+            });
+
+            // Show Kafka messages
+            document.getElementById("kafkaMessages").classList.remove("hidden");
+            gsap.to("#kafkaMessages div", {
+              duration: 0.5,
+              stagger: 0.3,
+              opacity: 1,
+              y: 0,
+              ease: "back.out",
+            });
+
+            // Move particle to Flink
+            gsap.to(dataParticle, {
+              duration: 1,
+              left: "40%",
+              delay: 0.5,
+              onComplete: () => {
+                // Show Flink calculations
+                document
+                  .getElementById("flinkCalculations")
+                  .classList.remove("hidden");
+                gsap.to("#flinkCalculations div", {
+                  duration: 0.5,
+                  stagger: 0.2,
+                  opacity: 1,
+                  y: 0,
+                  ease: "back.out",
+                });
+
+                // Show alert after delay
+                setTimeout(() => {
+                  document
+                    .getElementById("flinkAlert")
+                    .classList.remove("hidden");
+                  gsap.to("#flinkAlert", {
+                    duration: 0.5,
+                    opacity: 1,
+                    scale: 1,
+                    ease: "elastic.out",
+                  });
+                }, 1000);
+
+                // Move particle to Redis
+                gsap.to(dataParticle, {
+                  duration: 1,
+                  left: "60%",
+                  delay: 1.5,
+                  onComplete: () => {
+                    // Show Redis data
+                    document
+                      .getElementById("redisData")
+                      .classList.remove("hidden");
+                    gsap.to("#redisData div", {
+                      duration: 0.5,
+                      stagger: 0.3,
+                      opacity: 1,
+                      y: 0,
+                      ease: "back.out",
+                    });
+
+                    // Move particle to Dashboard
+                    gsap.to(dataParticle, {
+                      duration: 1,
+                      left: "80%",
+                      delay: 0.5,
+                      onComplete: () => {
+                        // Show Dashboard data
+                        document
+                          .getElementById("dashboardData")
+                          .classList.remove("hidden");
+                        gsap.to("#dashboardData div", {
+                          duration: 0.5,
+                          stagger: 0.3,
+                          opacity: 1,
+                          y: 0,
+                          ease: "back.out",
+                        });
+
+                        // Fade out particle
+                        gsap.to(dataParticle, {
+                          duration: 0.5,
+                          opacity: 0,
+                          delay: 1,
+                          onComplete: () => {
+                            playBtn.innerHTML =
+                              '<i class="fas fa-sync-alt mr-1"></i> Replay Animation';
+                            playBtn.disabled = false;
+                          },
+                        });
+                      },
+                    });
+                  },
+                });
+              },
+            });
+          },
+        });
+      }
+
+      playBtn.addEventListener("click", function () {
+        playBtn.innerHTML =
+          '<i class="fas fa-spinner fa-spin mr-1"></i> Playing...';
+        playBtn.disabled = true;
+        startAnimation();
+      });
+
+      // Dashboard simulation
+      let dashboardInterval;
+      let dashboardTime = 0;
+      const taxiPositions = {
+        1001: {
+          x: 40,
+          y: 45,
+          path: ["40,45", "45,44", "50,43", "55,42"],
+          speed: 45.2,
+        },
+        1002: { x: 60, y: 35, path: [], speed: 32.5 },
+        1003: { x: 30, y: 60, path: [], speed: 28.7 },
+      };
+
+      function updateDashboard() {
+        dashboardTime++;
+
+        // Update time display
+        const hours = Math.floor(dashboardTime / 3600);
+        const minutes = Math.floor((dashboardTime % 3600) / 60);
+        const seconds = dashboardTime % 60;
+        const timeStr = `08:${minutes.toString().padStart(2, "0")}:${seconds
+          .toString()
+          .padStart(2, "0")}`;
+        document.getElementById("dashboard-time").textContent = timeStr;
+
+        // Move taxis
+        if (dashboardTime % 5 === 0) {
+          taxiPositions["1001"].x += 1;
+          taxiPositions["1001"].y -= 0.5;
+
+          taxiPositions["1002"].x += Math.random() - 0.5;
+          taxiPositions["1002"].y += Math.random() - 0.5;
+
+          taxiPositions["1003"].x += 0.5;
+          taxiPositions["1003"].y += 0.5;
+
+          // Update positions
+          for (const [id, pos] of Object.entries(taxiPositions)) {
+            const taxi = document.getElementById(`d-taxi-${id}`);
+            if (taxi) {
+              taxi.style.left = `${pos.x}%`;
+              taxi.style.top = `${pos.y}%`;
+            }
+          }
+
+          // Update trajectory
+          const pathStr = taxiPositions["1001"].path
+            .map((p, i) => {
+              return `${i === 0 ? "M" : "L"}${p}`;
+            })
+            .join(" ");
+          document
+            .getElementById("d-trajectory-1001")
+            .setAttribute("d", pathStr);
+
+          // Random speed changes
+          taxiPositions["1001"].speed += Math.random() - 0.5;
+          taxiPositions["1002"].speed += Math.random() - 0.5;
+          taxiPositions["1003"].speed += Math.random() - 0.5;
+
+          // Update speed display
+          document.getElementById(
+            "d-taxi-speed"
+          ).textContent = `${taxiPositions["1001"].speed.toFixed(1)} km/h`;
+
+          // Trigger speed alert
+          if (
+            taxiPositions["1001"].speed > 80 &&
+            !document
+              .getElementById("d-speed-alert")
+              .classList.contains("hidden")
+          ) {
+            document.getElementById("d-speed-alert").classList.remove("hidden");
+            setTimeout(() => {
+              document.getElementById("d-speed-alert").classList.add("hidden");
+            }, 3000);
+          }
+
+          // Trigger zone alert for taxi 3
+          if (dashboardTime > 15 && dashboardTime < 20) {
+            document.getElementById("d-taxi-status").textContent = "Left Zone";
+            document.getElementById("d-zone-alert").classList.remove("hidden");
+          } else {
+            document.getElementById("d-taxi-status").textContent = "In Zone";
+            document.getElementById("d-zone-alert").classList.add("hidden");
+          }
+        }
+      }
+       
+
+      // Start dashboard simulation
+      dashboardInterval = setInterval(updateDashboard, 1000);
+
+      // Taxi selection
+      document
+        .getElementById("d-taxi-1001")
+        .addEventListener("click", function () {
+          document.getElementById("d-selected-taxi").textContent = "Taxi #1001";
+          document.getElementById(
+            "d-taxi-speed"
+          ).textContent = `${taxiPositions["1001"].speed.toFixed(1)} km/h`;
+          document.getElementById(
+            "d-taxi-location"
+          ).textContent = `39.9${Math.floor(
+            taxiPositions["1001"].x
+          )}, 116.${Math.floor(taxiPositions["1001"].y)}`;
+
+          // Highlight selected taxi
+          const highlight = document.getElementById("d-selected-highlight");
+          highlight.style.left = this.style.left;
+          highlight.style.top = this.style.top;
+          highlight.classList.remove("opacity-0");
+        });
+
+      document
+        .getElementById("d-taxi-1002")
+        .addEventListener("click", function () {
+          document.getElementById("d-selected-taxi").textContent = "Taxi #1002";
+          document.getElementById(
+            "d-taxi-speed"
+          ).textContent = `${taxiPositions["1002"].speed.toFixed(1)} km/h`;
+          document.getElementById(
+            "d-taxi-location"
+          ).textContent = `39.9${Math.floor(
+            taxiPositions["1002"].x
+          )}, 116.${Math.floor(taxiPositions["1002"].y)}`;
+
+          const highlight = document.getElementById("d-selected-highlight");
+          highlight.style.left = this.style.left;
+          highlight.style.top = this.style.top;
+          highlight.classList.remove("opacity-0");
+        });
+
+      document
+        .getElementById("d-taxi-1003")
+        .addEventListener("click", function () {
+          document.getElementById("d-selected-taxi").textContent = "Taxi #1003";
+          document.getElementById(
+            "d-taxi-speed"
+          ).textContent = `${taxiPositions["1003"].speed.toFixed(1)} km/h`;
+          document.getElementById(
+            "d-taxi-location"
+          ).textContent = `39.9${Math.floor(
+            taxiPositions["1003"].x
+          )}, 116.${Math.floor(taxiPositions["1003"].y)}`;
+
+          const highlight = document.getElementById("d-selected-highlight");
+          highlight.style.left = this.style.left;
+          highlight.style.top = this.style.top;
+          highlight.classList.remove("opacity-0");
+        });
+
+      // Initialize dashboard time
+      document.getElementById("dashboard-time").textContent = "08:00:00";
+      // Tab functionality
+      document.addEventListener('DOMContentLoaded', function() {
+        const tabs = document.querySelectorAll('[data-tab]');
+        
+        tabs.forEach(tab => {
+          tab.addEventListener('click', function() {
+            // Remove active classes from all tabs
+            tabs.forEach(t => {
+              t.classList.remove('active', 'border-indigo-500', 'text-indigo-600');
+              t.classList.add('border-transparent', 'text-gray-500');
+            });
+            
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+              content.classList.remove('active');
+              content.classList.add('hidden');
+            });
+            
+            // Add active classes to clicked tab
+            this.classList.add('active', 'border-indigo-500', 'text-indigo-600');
+            this.classList.remove('border-transparent', 'text-gray-500');
+            
+            // Show corresponding content
+            const tabId = this.getAttribute('data-tab') + '-tab';
+            const content = document.getElementById(tabId);
+            if (content) {
+              content.classList.remove('hidden');
+              content.classList.add('active');
+            }
+          });
+        });
+
+        // Activate first tab by default
+        if (tabs.length > 0) {
+          tabs[0].click();
+        }
+      });
+    </script>
+  </body>
+</html>

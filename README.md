@@ -1,187 +1,292 @@
-# 🚖 Ultra-High-Performance Taxi Data Streaming Platform
+# 🚖 Real-Time Taxi Fleet Monitoring System
+-----
 
-## ⚡ **Real Big Data Performance - ALL 10,000+ Files in Minutes!**
+## 🧭 Overview
 
-A truly high-performance, containerized data pipeline that **processes ALL 10,357 taxi files (788MB) in just 3-5 minutes** - demonstrating the real power of Kafka and Flink for big data processing.
+This system provides high-throughput, real-time monitoring for Beijing's taxi fleet. It processes GPS streams to calculate instantaneous and average speeds, track distance traveled, detect geofence violations, and trigger operational alerts based on configurable thresholds.
 
-### 🔥 **Breakthrough Performance Optimizations**
+-----
 
-- **📊 Full Dataset Processing**: ALL 10,357 files processed (no artificial limits!)
-- **🚀 Ultra-Fast Producer**: Fire-and-forget with massive parallelism (16 workers)
-- **⚡ Optimized Kafka**: 50 partitions, large buffers, zero-ack for maximum throughput
-- **🌊 High-Throughput Flink**: 4-slot parallelism optimized for streaming
-- **� Smart Memory Management**: Vectorized pandas operations
-- **🔧 Aggressive Batching**: 200-file mega-batches with ThreadPoolExecutor
+## 🌐 Live Deployment
+You can access our real-time dashboard hosted on a public cloud instance: http://35.209.186.27:8050
 
-**Results:**
-- ⚡ **Processing Time**: 3-5 minutes for entire dataset (instead of 10+ hours)
-- 🚀 **Throughput**: 100,000+ records/second sustained
-- � **Files per Second**: 50-100 files/second processing rate
-- � **Memory Efficient**: Optimized to use available resources effectively
+-----
 
-## 🎯 **Why This Approach Works**
+## 💡 Project Insights
+We’ve built a dedicated website that explains our project architecture, data flow, implementation details, and performance optimizations in a visual and interactive manner:
 
-✅ **Kafka is Built for This**: 50 partitions + optimized configs = massive throughput  
-✅ **Flink Loves Volume**: Designed for streaming millions of events  
-✅ **Parallel Processing**: ThreadPoolExecutor maxes out all CPU cores  
-✅ **Smart Batching**: Mega-batches reduce overhead dramatically  
-✅ **Fire-and-Forget**: Zero-acknowledgment for maximum speed  
+[👉 Explore the Project Explanation Website](https://big-data-explanation.vercel.app/)
 
-## 🚀 **One-Click Ultra-Fast Deployment**
+-----
 
-```cmd
-start-ultra-fast.cmd
+## ⚙️ Key Features
+
+| Feature              | Implementation Details                       |
+| :------------------- | :------------------------------------------- |
+| **Real-time Processing** | Kafka + Flink pipeline with 50ms latency     |
+| **Geofence Monitoring** | 10km radius from Forbidden City              |
+| **Speed Alerts** | $\>50$ km/h threshold detection                 |
+| **Dashboard** | Live updates with 10,000+ taxi visualization |
+| **Fault Tolerance** | Flink checkpoints + Kafka replication        |
+
+### 🧰 Tech Stack
+
+The system integrates multiple technologies for efficient real-time processing and visualization:
+
+  * **Apache Flink (Java)** – Distributed stream processing
+  * **Apache Kafka** – High-throughput event streaming
+  * **Redis** – Fast in-memory state storage and metrics
+  * **Docker** – Containerized deployment and orchestration
+  * **Dash (Python)** – Interactive real-time web dashboard
+
+-----
+
+## 🚀 Operations Guide
+
+### 🔧 Quick Start
+
+To get the system up and running quickly, follow these steps:
+
+**1. Pull required images:**
+
+```bash
+docker pull parth9969/bd25_project_a6_b:producer
+```
+```bash
+docker pull parth9969/bd25_project_a6_b:dash
 ```
 
-**Manual Steps:**
+**2. Initialize system:**
+
 ```bash
-# 1. Start all services
 docker-compose up -d --build
-
-# 2. Build Flink job
-docker run -it --rm ^
-  -v "%cd%\taxi_locations\consumer\taxi_flink:/app" ^
-  -w /app ^
-  maven:3.8.6-eclipse-temurin-17 ^
-  mvn clean package
-
-# 3. Deploy and watch the magic happen!
-docker exec flink-jobmanager flink run /opt/flink/usrlib/taxi-streaming-1.0-SNAPSHOT.jar
 ```
 
-## 📊 **Real-Time Performance Monitoring**
+**3. Build processing job :**
 
-Monitor the ultra-high-speed processing:
+  * **Windows:**
+
+    ```bash
+    docker run -it --rm ^
+      -v "%cd%\taxi_locations\consumer\taxi_flink:/app" ^
+      -w /app ^
+      maven:3.8.6-eclipse-temurin-17 ^
+      mvn clean package
+    ```
+
+  * **macOS/Linux:**
+
+    ```bash
+    docker run -it --rm \
+      -v "$(pwd)/taxi_locations/consumer/taxi_flink:/app" \
+      -w /app \
+      maven:3.8.6-eclipse-temurin-17 \
+      mvn clean package
+    ```
+
+**4. Deploy Flink job (copy JAR): (Run from one level under root i.e., inside `taxi_locations/`)**
+
 ```bash
-python monitor_performance.py
+docker cp consumer/taxi_flink/target/taxi_locations-1.jar flink-jobmanager:/opt/flink
 ```
 
-Expected output:
-```
-🔍 PERFORMANCE MONITOR - Ultra-Fast Taxi System
-🕐 14:23:45 | 🚖 Taxis: 2,847 | 📏 Distance: 45,231km | ⚡ Speed Data: 2,834 | 💾 RAM: 45.2% | 🔥 CPU: 78.3%
-```
+**5. Start Flink job:**
 
-## 🎛️ **System Architecture - Built for Speed**
-
-```
-📁 10,357 Files (788MB)
-    ↓ (200-file mega-batches)
-� Ultra-Fast Producer (16 parallel workers)
-    ↓ (100k+ records/sec)
-📡 Kafka (50 partitions, zero-ack)
-    ↓ (streaming)
-🌊 Flink (4-slot high-throughput)
-    ↓ (real-time processing)
-📦 Redis (in-memory storage)
-    ↓ (live updates)
-📱 Dashboard (real-time visualization)
-```
-
-### ⚡ **Performance Specifications**
-
-| **Component** | **Configuration** | **Throughput** |
-|---------------|------------------|----------------|
-| **Producer** | 16 parallel workers, 200-file batches | 50-100 files/sec |
-| **Kafka** | 50 partitions, 500KB batches, zero-ack | 100k+ records/sec |
-| **Flink** | 4 TaskManager slots, optimized watermarks | Real-time streaming |
-| **Overall** | Full 10,357-file processing | **3-5 minutes total** |
-
-## 🏆 **Benchmark Results**
-
-**Previous Performance:**
-- ❌ Processing Time: 10+ hours
-- ❌ Throughput: ~10 records/second
-- ❌ Files Processed: Limited to 500
-
-**Ultra-Optimized Performance:**
-- ✅ Processing Time: **3-5 minutes**
-- ✅ Throughput: **100,000+ records/second**
-- ✅ Files Processed: **ALL 10,357 files**
-- ✅ Improvement: **>200x faster**
-
-## 📈 **Live System Metrics**
-
-During processing, you'll see:
-```
-🚀 MEGA-BATCH 25/52 (200 files)
-    📁 Files: 200 processed in 14.2s
-    📊 Records: 127,543 sent in 1.8s  
-    🚀 Throughput: 70,857 records/second
-    📈 Total progress: 5,000/10,357 files (48.3%)
-```
-
-## ✅ **All Requirements Implemented at Scale**
-
-| Requirement | Status | Performance |
-|-------------|--------|-------------|
-| Speed Calculation | ✅ | 100k+ calculations/sec |
-| Average Speed | ✅ | Stateful processing for all taxis |
-| Distance Tracking | ✅ | Real-time cumulative distance |
-| Speed Alerts | ✅ | Instant violation detection |
-| Zone Monitoring | ✅ | Beijing center real-time monitoring |
-| Dashboard | ✅ | Live updates with 10k+ taxis |
-| Data Storage | ✅ | Redis handling massive throughput |
-
-## 🛠️ **Configuration for Different Loads**
-
-**For Even Faster Processing (if you have more resources):**
-```python
-# In producer.py
-max_workers = 32  # Use all available cores
-batch_size = 400  # Process 400 files at once
-```
-
-**For Resource-Constrained Systems:**
-```python
-# In producer.py  
-max_workers = 8   # Reduce parallelism
-batch_size = 100  # Smaller batches
-```
-
-## 📋 **System Requirements**
-
-**Minimum (for full dataset):**
-- 16GB RAM
-- 8 CPU cores
-- Docker & Docker Compose
-
-**Recommended (for maximum speed):**
-- 32GB RAM
-- 16+ CPU cores
-- SSD storage
-
-## 🎯 **Expected Timeline**
-
-```
-T+0:00 - Start services
-T+0:30 - Services initialized
-T+1:00 - Producer starts mega-batch processing
-T+1:30 - First data appears in dashboard
-T+2:00 - Peak throughput achieved (100k+ records/sec)
-T+4:00 - Processing complete! 
-T+4:30 - Dashboard showing all 10k+ taxis
-```
-
-## 🔍 **Performance Validation**
-
-Run the complete system validation:
 ```bash
-python validate_system.py
+docker exec flink-jobmanager flink run -d /opt/flink/taxi_locations-1.jar
 ```
 
-Expected validation results:
-- ✅ All requirements implemented
-- ✅ 100k+ records/second throughput
-- ✅ Sub-5-minute processing time
-- ✅ Real-time dashboard updates
+**6. Access dashboard:**
 
-## 🏆 **This is How Big Data Should Work!**
+Navigate to `http://localhost:8050` in your web browser.
 
-Your optimized system now demonstrates:
-- **True Kafka Power**: Handling massive message volumes
-- **Flink Excellence**: Real-time stream processing at scale  
-- **Smart Engineering**: Eliminating bottlenecks, not dataset size
-- **Production Ready**: Performance that scales with real-world data
+-----
 
-🎉 **Result: A taxi monitoring system that processes 10,000+ files in minutes, not hours!**
+## 🔄 Kafka Management
+
+**List Kafka topics:**
+
+```bash
+docker exec -it kafka kafka-topics --bootstrap-server localhost:9092 --list
+```
+
+```bash
+docker exec -it kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic taxi-locations \
+  --from-beginning \
+  --max-messages 5
+```
+
+-----
+
+## 📦 Redis Inspection
+
+
+**Get average speed metrics:**
+
+```bash
+docker exec redis redis-cli HGETALL metrics:avgSpeed
+```
+
+**Get Redis DB size:**
+
+```bash
+docker exec -it redis redis-cli DBSIZE
+```
+
+-----
+
+## ⚙️ Flink Operations
+
+
+**List running Flink jobs:**
+
+```bash
+docker exec flink-jobmanager flink list
+```
+
+**View Flink job metrics (replace `<job-id>` with the actual job ID):**
+
+```bash
+docker exec flink-jobmanager flink metrics <job-id>
+```
+
+-----
+
+## 📊 Dashboard Management
+
+**Rebuild and restart dashboard:**
+
+```bash
+docker-compose stop dash-app && 
+docker-compose rm -f dash-app &&
+docker-compose build --no-cache dash-app && 
+docker-compose up -d dash-app
+```
+
+-----
+
+## ☁️ Cloud & DevOps Commands
+
+### 🛠️ Install Essentials (Ubuntu)
+
+**Install Git:**
+
+```bash
+sudo apt update && sudo apt install git -y
+```
+
+**Install Docker:**
+
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
+**Install Screen:**
+
+```bash
+sudo apt install screen -y
+```
+
+**Install Cloudflared:**
+
+```bash
+wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && sudo dpkg -i cloudflared-linux-amd64.deb
+```
+
+### 🖥️ Screen Usage
+
+**Start new session:**
+
+```bash
+screen -S taxiapp
+```
+
+**List sessions:**
+
+```bash
+screen -ls
+```
+
+### 🌐 Cloudflared Tunnel
+
+**Expose dashboard:**
+
+```bash
+cloudflared tunnel --url http://localhost:8050
+```
+
+-----
+
+## 🧹 Optional Cleanup Commands
+
+**Remove Flink checkpoints:**
+
+```bash
+sudo rm -rf flink-checkpoints/*
+```
+
+**List Flink checkpoint files:**
+
+```bash
+ls -la flink-checkpoints
+```
+
+**Prune Docker resources:**
+
+```bash
+docker system prune -f
+```
+
+-----
+
+## 🧪 Performance Characteristics
+
+### 📊 Benchmark Results
+
+| Metric               | Before Optimization | After Optimization |
+| -------------------- | ------------------- | ------------------ |
+| Processing Time      | 10+ hours           | 3–5 minutes        |
+| Throughput           | \~10 records/sec    | 100k+ records/sec  |
+| File Processing Rate | 1 file / 2 min      | 50–100 files/sec   |
+| Max Taxis Processed  | 500                 | All 10,357         |
+
+
+-----
+
+## ✅ Validation
+
+**Verification Checks:**
+
+1. Throughput ≥ 100k records/sec
+
+2. All 10,357 files processed
+
+3. Processing time < 5 minutes
+
+4. Dashboard updates within 1s of even
+
+-----
+
+## 💻 System Requirements
+
+| Resource | Minimum           | Recommended (Production) |
+| :------- | :---------------- | :----------------------- |
+| **CPU** | 4 cores           | 16+ cores                |
+| **RAM** | 8GB               | 32GB                     |
+| **Storage** | SSD with 5GB free | NVMe SSD                 |
+| **Network** | 1Gbps             | 10Gbps                   |
+
+-----
+
+## 👥 Contributions
+
+This project was a collaborative effort. Here are the key contributions from each team member:
+
+| Contributor         | Key Contributions                                                                                   |
+| :------------------ | :-------------------------------------------------------------------------------------------------- |
+| **Sunmeet Kohli** | Dashboard UI/UX design, Flink MainJob logic, map visualization, incident display, interaction logic |
+| **Parthav Pillai** | Kafka producer setup, Redis client optimization, batch processing, performance tuning               |
+| **Sanika Acharya** | Flink-Redis sink, UI enhancements, incident/event logic, Redis schema, documentation                |
+| **Matthew Ayodele** | DTO design, cloud deployment scripts, Docker orchestration, system integration                      |
