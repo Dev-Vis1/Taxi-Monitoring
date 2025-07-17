@@ -1,4 +1,3 @@
-# redis_client.py - OPTIMIZED FOR HIGH THROUGHPUT
 import redis
 import json
 import msgpack
@@ -10,31 +9,31 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Optimized Redis connection with ultra-high-performance connection pool
+# Redis connection 
 pool = redis.ConnectionPool(
     host='redis', 
     port=6379, 
     db=0, 
-    max_connections=150,  # Increased for ultra-high throughput
+    max_connections=150,  
     decode_responses=True,
-    socket_timeout=3,     # Further reduced for faster timeouts
+    socket_timeout=3,     
     socket_connect_timeout=3,
     retry_on_timeout=True,
     health_check_interval=30
 )
 r = redis.Redis(connection_pool=pool)
 
-# Simulation state - Optimized for real-time streaming
+# Simulation state 
 simulation_start_time = None
-simulation_speed = 2  # Seconds between each simulation step
+simulation_speed = 2  
 current_step = 0
 
-# Enhanced caching system
+# Caching system
 taxi_data_cache = {}
 taxi_route_cache = {}
 taxi_ids_cache = None
 taxi_ids_cache_time = 0
-cache_expiry = 60  # Reduced to 1 minute for more frequent updates
+cache_expiry = 60  
 
 def get_all_taxi_ids():
     """Get all taxi IDs using Redis ZRANGEBYSCORE for active taxis (sorted set)"""
@@ -43,8 +42,8 @@ def get_all_taxi_ids():
     current_time = time.time()
     if taxi_ids_cache is None or (current_time - taxi_ids_cache_time) > cache_expiry:
         try:
-            # Use Redis sorted set for active taxis - get only recent ones (last 5 minutes)
-            time_threshold = current_time - 300  # 5 minutes ago
+           
+            time_threshold = current_time - 300  
             taxi_ids_cache = r.zrangebyscore('taxi:active', time_threshold, current_time)
             taxi_ids_cache_time = current_time
             logger.info(f"Refreshed taxi cache: {len(taxi_ids_cache)} active taxis (last 5 minutes)")
@@ -63,8 +62,7 @@ def get_latest_location(taxi_id):
         pipe = r.pipeline()
         pipe.hgetall(key)
         pipe.hget("metrics:speed", taxi_id)
-        # Also get recent trajectory points
-        pipe.lrange(f"trajectory:{taxi_id}", 0, 4)  # Get last 5 positions
+        pipe.lrange(f"trajectory:{taxi_id}", 0, 4) 
         results = pipe.execute()
         
         data = results[0]
@@ -90,13 +88,13 @@ def get_latest_location(taxi_id):
                     except:
                         continue
             
-            # FIXED: Redis stores lat/lon correctly, don't swap them
+            
             location_data = {
-                "latitude": float(data["lat"]),   # lat is latitude
-                "longitude": float(data["lon"]),  # lon is longitude  
+                "latitude": float(data["lat"]),  
+                "longitude": float(data["lon"]),  
                 "timestamp": data.get("time", ""),
                 "speed": speed,
-                "trajectory": trajectory  # Add trajectory for smooth movement
+                "trajectory": trajectory 
             }
             
             return location_data
@@ -138,7 +136,6 @@ def get_taxi_distance(taxi_id):
 def get_all_taxi_distances():
     """Get total distances for all CURRENTLY ACTIVE taxis only"""
     try:
-        # Get currently active taxi IDs (those with current location data)
         current_taxi_ids = get_all_taxi_ids()
         if not current_taxi_ids:
             return 0.0
@@ -150,7 +147,7 @@ def get_all_taxi_distances():
         excluded_taxis = []
         
         for taxi_id, distance_str in all_distances.items():
-            # Only include distance for currently active taxis
+            
             if taxi_id in current_taxi_ids:
                 try:
                     distance = float(distance_str)
@@ -175,11 +172,10 @@ def get_all_taxi_distances():
 
 def get_route(taxi_id):
     key = f"route:{taxi_id}"
-    route_points = r.lrange(key, 0, -1)  # Get all route points
+    route_points = r.lrange(key, 0, -1)  
     if route_points:
         try:
             parsed_points = [json.loads(point) for point in route_points]
-            # Sort by timestamp to ensure chronological order
             parsed_points.sort(key=lambda x: x.get('timestamp', ''))
             return parsed_points
         except json.JSONDecodeError as e:
@@ -223,7 +219,6 @@ def get_current_data_timestamp():
         simulation_start_time = time.time()
         current_timestamp_index = 0
     
-    # Calculate which timestamp we should be at based on elapsed time
     elapsed_real_time = time.time() - simulation_start_time
     target_index = int(elapsed_real_time / simulation_speed) % len(timestamps)
     
@@ -245,15 +240,13 @@ def get_taxi_position_at_timestamp(taxi_id, target_timestamp_str):
     if not route_data:
         return None
     
-    # Look for exact timestamp match first
     for position in route_data:
         if position.get('timestamp') == target_timestamp_str:
             return position
     
-    # If no exact match, find the closest timestamp within a reasonable time window
     closest_position = None
     min_time_diff = float('inf')
-    max_time_window = 3600  # Only show taxi if it has data within 1 hour of target time
+    max_time_window = 3600  
     
     try:
         target_time = datetime.strptime(target_timestamp_str, '%Y-%m-%d %H:%M:%S')
@@ -267,7 +260,6 @@ def get_taxi_position_at_timestamp(taxi_id, target_timestamp_str):
             pos_time = datetime.strptime(position['timestamp'], '%Y-%m-%d %H:%M:%S')
             time_diff = abs((pos_time - target_time).total_seconds())
             
-            # Only consider positions within the time window
             if time_diff <= max_time_window and time_diff < min_time_diff:
                 min_time_diff = time_diff
                 closest_position = position
@@ -281,18 +273,16 @@ def get_active_taxis_at_timestamp(target_timestamp_str, max_taxis=1000):
     all_taxi_ids = get_all_taxi_ids()
     active_taxis = {}
     
-    # Limit the number of taxis to avoid performance issues
     limited_taxi_ids = all_taxi_ids[:max_taxis]
     
     for taxi_id in limited_taxi_ids:
         position = get_taxi_position_at_timestamp(taxi_id, target_timestamp_str)
-        if position:  # Only include taxis that are active at this time
-            # Get real speed from Redis metrics (calculated by Flink)
+        if position:  
             speed = get_taxi_speed(taxi_id)
             active_taxis[taxi_id] = {
                 'lat': position.get('latitude', 0),
                 'lng': position.get('longitude', 0),
-                'speed': speed,  # Real speed from Flink processing
+                'speed': speed,  
                 'timestamp': position.get('timestamp', '')
             }
     
@@ -316,12 +306,11 @@ def get_taxi_clusters(active_taxis, cluster_distance=0.01):
         }
         processed.add(taxi_id)
         
-        # Find nearby taxis
         for other_taxi_id, other_data in active_taxis.items():
             if other_taxi_id in processed:
                 continue
                 
-            # Simple distance calculation
+            # Distance calculation
             lat_diff = abs(data['lat'] - other_data['lat'])
             lng_diff = abs(data['lng'] - other_data['lng'])
             
@@ -350,18 +339,18 @@ def calculate_speed(lat1, lon1, lat2, lon2, time1, time2):
     dlon = lon2 - lon1
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a))
-    r = 6371  # Radius of earth in kilometers
+    r = 6371  
     distance = c * r
     
-    # Calculate time difference in hours
+   
     try:
         t1 = datetime.strptime(time1, '%Y-%m-%d %H:%M:%S')
         t2 = datetime.strptime(time2, '%Y-%m-%d %H:%M:%S')
-        time_diff = abs((t2 - t1).total_seconds()) / 3600  # Convert to hours
+        time_diff = abs((t2 - t1).total_seconds()) / 3600  
         
         if time_diff > 0:
-            speed = distance / time_diff  # km/h
-            return min(speed, 200)  # Cap at reasonable speed (200 km/h)
+            speed = distance / time_diff  
+            return min(speed, 200)  
         else:
             return 0
     except (ValueError, ZeroDivisionError):
@@ -378,12 +367,10 @@ def get_taxi_relative_position(taxi_id, simulation_step):
     if not route_data:
         return None
     
-    # Calculate which data point to show based on simulation step
     total_points = len(route_data)
     if total_points == 0:
         return None
     
-    # Use modulo to cycle through the route continuously
     current_index = simulation_step % total_points
     
     position = route_data[current_index]
@@ -394,9 +381,9 @@ def get_taxi_relative_position(taxi_id, simulation_step):
     return {
         'latitude': position.get('latitude', 0),
         'longitude': position.get('longitude', 0),
-        'speed': speed,  # Real speed from Flink processing
+        'speed': speed,  
         'timestamp': position.get('timestamp', ''),
-        'route_progress': (current_index / total_points) * 100  # Progress through route
+        'route_progress': (current_index / total_points) * 100  
     }
 
 def get_all_active_taxis_relative(max_taxis=1000):
@@ -407,7 +394,6 @@ def get_all_active_taxis_relative(max_taxis=1000):
     global current_step
     
     all_taxi_ids = get_all_taxi_ids()
-    # Limit number of taxis for performance, but show more for demonstration
     if len(all_taxi_ids) > max_taxis:
         all_taxi_ids = all_taxi_ids[:max_taxis]
     
@@ -503,13 +489,11 @@ def get_recently_active_taxi_ids(time_threshold_minutes=5):
         for key in keys:
             if key.startswith("location:"):
                 taxi_id = key.split(":")[1]
-                # Get the timestamp for this taxi
                 taxi_data = r.hgetall(key)
                 if taxi_data and 'time' in taxi_data:
                     try:
                         # Parse the timestamp
                         taxi_time_str = taxi_data['time']
-                        # Handle different timestamp formats
                         try:
                             taxi_time = datetime.strptime(taxi_time_str, '%Y-%m-%d %H:%M:%S')
                         except ValueError:
@@ -520,14 +504,11 @@ def get_recently_active_taxi_ids(time_threshold_minutes=5):
                                                                minute=taxi_time.minute, 
                                                                second=taxi_time.second)
                             except ValueError:
-                                # Skip if we can't parse the timestamp
                                 continue
                         
-                        # Check if it's recent (within threshold)
                         if taxi_time >= threshold_time:
                             recent_taxi_ids.append(taxi_id)
                     except Exception:
-                        # Skip if we can't parse the timestamp
                         continue
         
         logger.info(f"Found {len(recent_taxi_ids)} recently active taxis (last {time_threshold_minutes} minutes)")
@@ -542,19 +523,19 @@ def get_batch_locations(taxi_ids, batch_size=1000):
     
     # Adaptive batch sizing for maximum performance
     if len(taxi_ids) > 5000:
-        batch_size = 2000  # Very large batches for huge datasets
+        batch_size = 2000  
     elif len(taxi_ids) > 2000:
-        batch_size = 1000  # Large batches for huge datasets
+        batch_size = 1000  
     elif len(taxi_ids) > 500:
-        batch_size = 500   # Medium batches
+        batch_size = 500   
     else:
         batch_size = min(batch_size, len(taxi_ids))
     
-    # Process in optimized batches
+    # Process in Batches
     for i in range(0, len(taxi_ids), batch_size):
         batch_taxi_ids = taxi_ids[i:i + batch_size]
         
-        # Use pipeline for ultra-fast batch operations
+        #  Pipeline
         pipe = r.pipeline()
         for taxi_id in batch_taxi_ids:
             pipe.hmget(f"location:{taxi_id}", ["lat", "lon", "time"])
@@ -563,7 +544,6 @@ def get_batch_locations(taxi_ids, batch_size=1000):
         try:
             pipe_results = pipe.execute()
             
-            # Process results in groups of 2 (location, speed) for maximum speed
             for j in range(0, len(pipe_results), 2):
                 taxi_idx = j // 2
                 if taxi_idx < len(batch_taxi_ids):
@@ -591,7 +571,6 @@ def get_batch_locations(taxi_ids, batch_size=1000):
 def check_area_violations_bulk(taxi_locations):
     """Check area violations for multiple taxis using Redis GEO operations"""
     try:
-        # Use Redis GEORADIUS for efficient area checking
         in_area_taxis = r.georadius(
             'taxi_coords', 
             MONITORED_AREA['center_lon'],
@@ -601,7 +580,7 @@ def check_area_violations_bulk(taxi_locations):
             withdist=True
         )
         
-        # Convert to set for fast lookup
+        
         in_area_set = {taxi_id for taxi_id, _ in in_area_taxis}
         
         violations = []
@@ -612,13 +591,13 @@ def check_area_violations_bulk(taxi_locations):
                 lat1, lon1 = location['latitude'], location['longitude']
                 lat2, lon2 = MONITORED_AREA['center_lat'], MONITORED_AREA['center_lon']
                 
-                # Haversine formula to calculate distance
+                # Haversine formula 
                 lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
                 dlat = lat2 - lat1
                 dlon = lon2 - lon1
                 a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
                 c = 2 * math.asin(math.sqrt(a))
-                distance_km = 6371.0 * c  # Earth radius in km
+                distance_km = 6371.0 * c  
                 
                 violations.append({
                     'taxi_id': taxi_id,
@@ -634,7 +613,6 @@ def check_area_violations_bulk(taxi_locations):
         logger.error(f"Error checking area violations: {e}")
         return []
 
-# Add constants for monitored area (matching Flink configuration)
 MONITORED_AREA = {
     'center_lat': 39.9163,
     'center_lon': 116.3972,

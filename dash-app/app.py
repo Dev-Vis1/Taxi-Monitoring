@@ -11,7 +11,7 @@ import time
 from redis_client import get_all_taxi_ids, get_latest_location, get_route, get_all_taxi_distances, get_batch_locations, check_area_violations_bulk
 import pytz
 
-# Initialize the Dash app
+
 app = dash.Dash(
     __name__,
     external_stylesheets=[
@@ -21,54 +21,51 @@ app = dash.Dash(
 )
 server = app.server
 
-# Mapbox Configuration (REPLACE WITH YOUR TOKEN)
-MAPBOX_ACCESS_TOKEN = "pk.eyJ1Ijoic3VubWVldDU1IiwiYSI6ImNtY2ozMjBrMzA0dGkyaXNhM3Q0b3c1Z2IifQ.GPtW45RgkjnbsaGc2GOA3w"  # Get from mapbox.com
-MAPBOX_STYLE = "outdoors"  # Other options: "light", "dark", "outdoors", "satellite"
+
+MAPBOX_ACCESS_TOKEN = "pk.eyJ1Ijoic3VubWVldDU1IiwiYSI6ImNtY2ozMjBrMzA0dGkyaXNhM3Q0b3c1Z2IifQ.GPtW45RgkjnbsaGc2GOA3w"  
+MAPBOX_STYLE = "outdoors"  
 
 # Redis Configuration
 REDIS_HOST = 'redis'
 REDIS_PORT = 6379
 REDIS_DB = 0
 
-# Data storage
 violations_today = 0  
-area_violations_today = 0  # New: Track area violations
-total_distance_covered = 0.0  # New: Track total distance covered by all taxis
+area_violations_today = 0  
+total_distance_covered = 0.0  
 
 taxi_data = {}
 incident_log = deque(maxlen=500)
 
-# REAL-TIME TRAJECTORY TRACKING - For smooth Uber-like movement
-taxi_trajectories = {}  # Store recent positions for each taxi
-MAX_TRAJECTORY_LENGTH = 10  # Keep last 10 positions for smooth interpolation
-trajectory_update_interval = 1.0  # Update trajectories every second
+taxi_trajectories = {}  
+MAX_TRAJECTORY_LENGTH = 10  
+trajectory_update_interval = 1.0  
 
-# Blacklist for taxi IDs or incident types
+# Blacklist for taxi IDs 
 BLACKLISTED_TAXIS = set()  
 BLACKLISTED_INCIDENT_TYPES = set()
 
-# Area violation configuration (Beijing city center) - Matches Flink MainJob constants
+# Area violation configuration 
 MONITORED_AREA = {
-    'center_lat': 39.9163,  # CENTER_LAT from your Flink MainJob.java
-    'center_lon': 116.3972,  # CENTER_LON from your Flink MainJob.java  
-    'warning_radius_km': 10.0,  # WARNING_RADIUS from your Flink MainJob.java
-    'max_radius_km': 15.0       # MAX_RADIUS from your Flink MainJob.java
+    'center_lat': 39.9163, 
+    'center_lon': 116.3972,  
+    'warning_radius_km': 10.0,  
+    'max_radius_km': 15.0       
 }
 
 def is_in_monitored_area(lat, lon):
     """Check if coordinates are within the monitored area using the same logic as Flink"""
-    # Use a simple distance calculation for area checking (matches Flink MainJob logic)
+    
     import math
     
-    # Convert to radians for calculation
     lat1, lon1, lat2, lon2 = map(math.radians, [lat, lon, MONITORED_AREA['center_lat'], MONITORED_AREA['center_lon']])
     
-    # Haversine formula (same as your Flink Haversine.java)
+    # Haversine formula
     dlat = lat2 - lat1
     dlon = lon2 - lon1
     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
     c = 2 * math.asin(math.sqrt(a))
-    distance = 6371.0 * c  # Same EARTH_RADIUS_KM as your Haversine.java
+    distance = 6371.0 * c  
     
     if distance <= MONITORED_AREA['warning_radius_km']:
         return "inside", distance
@@ -84,26 +81,24 @@ def is_blacklisted_incident(incident):
         return True
     if incident['type'] == 'Speed Violation' and incident['speed'] >= 200:
         return True
-    if incident['type'] == 'Area Violation':  # Don't blacklist area violations
+    if incident['type'] == 'Area Violation':  
         return False
     return False
 
-# Real-time data fetcher using current locations and calculated speeds - HIGHLY OPTIMIZED
+# Real-time data fetcher
 def fetch_simulation_data():
     global violations_today, area_violations_today, total_distance_covered
     print("=== Starting highly optimized real-time data fetcher thread ===")
     tz = pytz.timezone('Europe/Berlin')
     
-    # Performance tracking
+    
     fetch_count = 0
     last_performance_log = time.time()
-    
-    # Caching for better performance
+
     taxi_ids_cache = []
     taxi_ids_cache_time = 0
-    cache_duration = 30  # Cache taxi IDs for 30 seconds
+    cache_duration = 30  
     
-    # Store previous locations for distance calculation
     previous_locations = {}
     
     while True:
@@ -111,7 +106,6 @@ def fetch_simulation_data():
             fetch_start = time.time()
             print(f"Fetching taxi data... (iteration {fetch_count})")
             
-            # Use cached taxi IDs if available and fresh
             current_time = time.time()
             if not taxi_ids_cache or (current_time - taxi_ids_cache_time) > cache_duration:
                 taxi_ids_cache = get_all_taxi_ids()
@@ -121,11 +115,10 @@ def fetch_simulation_data():
             all_taxi_ids = taxi_ids_cache
             print(f"Using {len(all_taxi_ids)} taxi IDs from cache")
             
-            # OPTIMIZED BATCH PROCESSING - Get all locations in bulk
+            # BATCH PROCESSING
             print("Fetching locations in bulk...")
             bulk_locations = get_batch_locations(all_taxi_ids, batch_size=500)
             
-            # Clear old data and process bulk results
             new_taxi_data = {}
             processed_count = 0
             
@@ -135,7 +128,6 @@ def fetch_simulation_data():
                     current_lat = location["latitude"]
                     current_lon = location["longitude"]
                     
-                    # UPDATE TRAJECTORY for smooth movement
                     update_taxi_trajectory(taxi_id, current_lat, current_lon, location["timestamp"])
                     
                     new_taxi_data[taxi_id] = {
@@ -158,13 +150,11 @@ def fetch_simulation_data():
                             'timestamp': datetime.now(tz).strftime('%H:%M:%S')
                         })
                         print(f"Warning: Taxi {taxi_id} in warning zone ({distance:.2f} km)")
-                            # DEbugging code for warning
-                            # print(f"New WARNING RADIUS incident logged: Taxi {taxi_id} at {distance:.2f} km")
-            
-            # OPTIMIZED SPEED VIOLATION CHECK - only process high speeds
+                                    
+            #  SPEED VIOLATION CHECK 
             for taxi_id, location in bulk_locations.items():
                 speed = location["speed"]
-                if speed > 50:  # Only process potential violations
+                if speed > 50: 
                     incident = {
                         'taxi_id': taxi_id,
                         'type': 'Speed Violation',
@@ -173,10 +163,10 @@ def fetch_simulation_data():
                         'lng': location['longitude'],
                         'timestamp': datetime.now(tz).strftime('%H:%M:%S')
                     }
-                    # Quick blacklist check and duplicate prevention
+                    
                     if (not is_blacklisted_incident(incident) and 
                         not any(i['taxi_id'] == taxi_id and i['type'] == 'Speed Violation' 
-                               for i in list(incident_log)[:3])):  # Check only last 3
+                               for i in list(incident_log)[:3])): 
                         incident_log.appendleft(incident)
                         violations_today += 1
                         
@@ -196,10 +186,8 @@ def fetch_simulation_data():
                         area_violations_today += 1
                         print(f"Violation: Taxi {taxi_id} left monitored area ({distance:.2f} km)")
             
-            # Update total distance covered from Flink calculations
             total_distance_covered = get_all_taxi_distances()
             
-            # Update taxi_data atomically for thread safety
             taxi_data.clear()
             taxi_data.update(new_taxi_data)
             
@@ -207,14 +195,14 @@ def fetch_simulation_data():
             fetch_time = time.time() - fetch_start
             fetch_count += 1
             
-            if time.time() - last_performance_log > 30:  # Log every 30 seconds
+            if time.time() - last_performance_log > 30: 
                 print(f"Performance: {processed_count}/{len(all_taxi_ids)} taxis processed in {fetch_time:.2f}s")
                 print(f"Active taxis with valid locations: {len(taxi_data)}")
                 print(f"Total distance covered: {total_distance_covered:.2f} km")
                 print(f"Speed violations: {violations_today}, Area violations: {area_violations_today}")
                 last_performance_log = time.time()
             
-            time.sleep(1.5)  # Faster updates for smoother movement
+            time.sleep(1.5)  
         except Exception as e:
             print(f"Real-time data error: {e}")
             import traceback
@@ -222,7 +210,6 @@ def fetch_simulation_data():
             time.sleep(5)
 
 print("=== Starting simulation thread ===")
-# Start simulation fetcher thread
 simulation_thread = Thread(target=fetch_simulation_data, daemon=True)
 simulation_thread.start()
 print("=== Simulation thread started ===")
@@ -253,24 +240,21 @@ app.layout = dbc.Container(fluid=True, children=[
     dbc.Row([
         # Left column
         dbc.Col(md=8, children=[
-            # Map
-            # Map
+            
             dbc.Card([
                 dbc.CardHeader([
                     html.Div([
-                        # Title on the left
+                        
                         html.H4("Taxi Activity Map", className="card-title mb-0 me-3"),
                         
-                        # Controls on the right - organized in two rows
                         html.Div([
-                            # First row - ordered as requested
                             html.Div([
                                 # 1. Monitored Area switch first
                                 html.Div([
                                     html.Span("Monitored Area:", className="me-2 small"),
                                     dbc.Switch(
                                         id="area-filter-switch",
-                                        label=None,  # Label is now in the span
+                                        label=None,  
                                         value=False,
                                         className="d-inline-flex align-items-center me-3",
                                         style={"verticalAlign": "middle"}
@@ -286,7 +270,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                     className="me-3 btn-sm py-1"
                                 ),
                                 
-                                # 3. Zoom controls last
+                                # 3. Zoom controls 
                                 dbc.ButtonGroup([
                                     dbc.Button(html.I(className="fas fa-search-plus"), 
                                             id="zoom-in", 
@@ -305,7 +289,6 @@ app.layout = dbc.Container(fluid=True, children=[
                             
                             # Second row - taxi controls
                             html.Div([
-                                # Taxi limit dropdown
                                 html.Div([
                                     html.Span("Filter Taxis:", className="me-2 small"),
                                     dcc.Dropdown(
@@ -326,7 +309,7 @@ app.layout = dbc.Container(fluid=True, children=[
                                     ),
                                 ], className="d-inline-flex align-items-center"),
                                 
-                                # Taxi selection dropdown
+                               
                                 dcc.Dropdown(
                                     id="taxi-id",
                                     options=[{"label": tid, "value": tid} for tid in get_all_taxi_ids()],
@@ -474,23 +457,23 @@ app.layout = dbc.Container(fluid=True, children=[
     # Footer
     dbc.Navbar(
         dbc.Container(
-            html.P("Beijing Taxi Monitoring System ©️ 2023 | Real-time Stream Processing Dashboard",
-                   className="text-center w-100 mb-0"),
+            html.P("Team A6: Parthav Pillai, Sunmeet Kohli, Sanika Acharya, Matthew Ayodele",
+            className="text-center w-100 mb-0 text-white"),
         ),
         color="dark",
         dark=True,
         className="mt-4 py-3"
     ),
 
-    # Interval for updates - Real-time 2-second updates for smooth taxi movement
-    dcc.Interval(id='update-interval', interval=5000, n_intervals=0),  # 2-second updates for smooth movement
+    
+    dcc.Interval(id='update-interval', interval=5000, n_intervals=0),  
     
     # Hidden div to store trajectory toggle state
     html.Div(id='trajectory-state', children='false', style={'display': 'none'}),
     html.Div(id='area-filter-state', children='false', style={'display': 'none'}),
 ])
 
-# CSS styles
+# CSS 
 app.css.append_css({
     'external_url': 'https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap'
 })
@@ -534,7 +517,7 @@ app.css.append_css({
     '''
 })
 
-# Callbacks
+
 @app.callback(
     Output('current-time', 'children'),
     Input('update-interval', 'n_intervals')
@@ -550,7 +533,7 @@ def update_time(n):
 )
 def update_area_filter_state(switch_value):
     return 'true' if switch_value else 'false'
-# Trajectory toggle callback
+
 @app.callback(
     [Output('trajectory-state', 'children'),
      Output('toggle-trajectory', 'color'),
@@ -560,15 +543,14 @@ def update_area_filter_state(switch_value):
 )
 def toggle_trajectory_display(n_clicks, current_state):
     if n_clicks is None:
-        return 'false', 'info', True  # Default: trajectories off, outlined button
+        return 'false', 'info', True  
     
-    # Toggle the state
     new_state = 'true' if current_state == 'false' else 'false'
     
     if new_state == 'true':
-        return 'true', 'info', False  # Trajectories on, solid button
+        return 'true', 'info', False  
     else:
-        return 'false', 'info', True  # Trajectories off, outlined button
+        return 'false', 'info', True 
 
 @app.callback(
     [Output('taxi-map', 'figure'),
@@ -594,14 +576,9 @@ def toggle_trajectory_display(n_clicks, current_state):
 def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_trajectories, taxi_limit,area_filter_state,incident_type, relayout_data, current_figure):
     global violations_today, area_violations_today, total_distance_covered
     ctx = dash.callback_context
-    
-    # Performance optimization: cache frequently used values
     start_time = time.time()
-    
-    # Default values
     zoom_level = 12
     
-    # Get current map parameters from the figure if available
     if current_figure and 'layout' in current_figure and 'mapbox' in current_figure['layout']:
         current_mapbox = current_figure['layout']['mapbox']
         zoom_level = current_mapbox.get('zoom', zoom_level)
@@ -611,7 +588,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         center_lat = 39.9042
         center_lon = 116.4074
     
-    # Handle zoom controls
+    # zoom controls
     if ctx.triggered:
         trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
         if trigger_id == 'zoom-in':
@@ -623,10 +600,9 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
             center_lat = 39.9042
             center_lon = 116.4074
     
-    # Create map figure
     map_fig = go.Figure()
     
-    # Optimized data snapshot - avoid deep copy for performance
+    # Data snapshot 
     taxi_data_snapshot = taxi_data.copy() if taxi_data else {}
     if area_filter_state == 'true':
 
@@ -635,40 +611,30 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         for taxi_id, data in taxi_data_snapshot.items():
 
             status, _ = is_in_monitored_area(data['lat'], data['lng'])
-            if status in ["inside", "warning"]:  # Only show taxis within 15km
+            if status in ["inside", "warning"]:  
                 filtered_taxi_data[taxi_id] = data
         taxi_data_snapshot = filtered_taxi_data
     
-    # Apply taxi limit if specified
+    
     if taxi_limit > 0 and len(taxi_data_snapshot) > taxi_limit:
-        # Sort taxis by ID for consistent selection and keep the first N taxis
         sorted_taxi_ids = sorted(taxi_data_snapshot.keys())
         limited_taxi_ids = sorted_taxi_ids[:taxi_limit]
         
-        # Always include the selected taxi if it exists, even if it's outside the limit
         if selected_taxi_id and selected_taxi_id in taxi_data_snapshot and selected_taxi_id not in limited_taxi_ids:
-            # Remove the last taxi from the limit and add the selected one
             limited_taxi_ids = limited_taxi_ids[:-1] + [selected_taxi_id]
         
         taxi_data_snapshot = {tid: taxi_data_snapshot[tid] for tid in limited_taxi_ids}
         print(f"Debug: Limited display to {len(taxi_data_snapshot)} out of {len(taxi_data)} total taxis")
 
     if taxi_data_snapshot:
-        # Debug: Print what taxis we have
         print(f"Debug: Displaying {len(taxi_data_snapshot)} taxis with smooth trajectories")
-        
-        # ENHANCED VISUALIZATION with trajectory lines and interpolated positions
-        # Only show trajectory lines if enabled
         if show_trajectories == 'true':
-            # First, add trajectory lines for each taxi to show movement paths
-            # Only show trajectories for taxis that are currently being displayed
             for taxi_id, trajectory in taxi_trajectories.items():
                 if taxi_id in taxi_data_snapshot and len(trajectory) > 1:
-                    # Draw trajectory line for this taxi
                     lats = [pos['lat'] for pos in trajectory]
                     lons = [pos['lon'] for pos in trajectory]
                     
-                    # Add trajectory line
+                    # Trajectory line
                     map_fig.add_trace(go.Scattermapbox(
                         lat=lats,
                         lon=lons,
@@ -679,12 +645,11 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
                         name=f"Trajectory {taxi_id}"
                     ))
         
-        # Convert to DataFrame for efficient processing with smooth positions
+        
         taxi_positions = []
         current_time = time.time()
         
         for taxi_id, data in taxi_data_snapshot.items():
-            # Get smooth interpolated position
             smooth_lat, smooth_lon = get_smooth_taxi_position(taxi_id, current_time)
             if smooth_lat is not None and smooth_lon is not None:
                 taxi_positions.append({
@@ -698,61 +663,49 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         if taxi_positions:
             taxi_df = pd.DataFrame(taxi_positions)
             
-            # Optimize by filtering out invalid data points
             taxi_df = taxi_df.dropna(subset=['lat', 'lng'])
             taxi_df = taxi_df[(taxi_df['lat'] != 0) & (taxi_df['lng'] != 0)]
-   
-            # Color markers by speed and area status for better visualization
-            def get_speed_color(speed):
-                if speed > 80: return '#ff0000'      # Red - Very fast
-                elif speed > 60: return '#ff4500'   # Orange-red - Fast  
-                elif speed > 40: return '#ffa500'   # Orange - Medium-fast
-                elif speed > 20: return '#ffff00'   # Yellow - Medium
-                else: return '#00ff00'              # Green - Slow
+           
+            taxi_df['status'], taxi_df['distance'] = zip(*taxi_df.apply(lambda row: is_in_monitored_area(row['lat'], row['lng']), axis=1))
             
-            def get_area_status_color(lat, lng):
-                """Get color based on area status"""
-                is_in_area, distance = is_in_monitored_area(lat, lng)
-                if not is_in_area:
-                    return '#ff0000'  # Red - Outside area
-                elif distance > MONITORED_AREA['warning_radius_km']:
-                    return '#ffa500'  # Orange - Near boundary
-                else:
-                    return None  # Use speed color
-            
-            # Apply colors based on area status first, then speed
-            taxi_df['area_color'] = taxi_df.apply(lambda row: get_area_status_color(row['lat'], row['lng']), axis=1)
-            taxi_df['speed_color'] = taxi_df['speed'].apply(get_speed_color)
-            taxi_df['color'] = taxi_df['area_color'].fillna(taxi_df['speed_color'])
-            
-            # ENHANCED TAXI MARKERS with smooth movement animation
+            # Taxi markers with smooth movement animation
             map_fig.add_trace(go.Scattermapbox(
                 lat=taxi_df['lat'],
                 lon=taxi_df['lng'],
                 mode='markers',
                 marker=dict(
-                    size=20,  # Slightly larger for better visibility
-                    color=taxi_df['color'],
-                    opacity=1,  # More opaque for better visibility
+                    size=20, 
+                    color=taxi_df.apply(lambda row: 
+                        '#ff0000' if row['status'] == 'outside' else
+                        '#ffa500' if row['status'] == 'warning' else 
+                        '#00ff00', axis=1),
+                    opacity=1,  
                     symbol='car',
                     allowoverlap=True,
                     sizemode='diameter'
                 ),
-                customdata=taxi_df[['taxi_id', 'speed']],
+                customdata=taxi_df[['taxi_id', 'speed', 'status', 'distance']].values.tolist(),
                 hovertemplate=(
                     "<b>Taxi %{customdata[0]}</b><br>"
                     "Speed: %{customdata[1]:.1f} km/h<br>"
                     "Location: %{lat:.4f}, %{lon:.4f}<br>"
                     "<i>Smooth interpolated position</i><extra></extra>"
                 ),
+                 hoverlabel=dict(
+                    bgcolor=taxi_df.apply(lambda row: 
+                      '#ff0000' if row['status'] == 'outside' else
+                      '#ffa500' if row['status'] == 'warning' else 
+                      '#00ff00', axis=1),
+                    font=dict(color='white')
+                 ),
+                 
                 name="Taxis with Trajectories",
                 showlegend=False,
                 hoverinfo='text'
             ))
         
-        # Highlight selected taxi with special marker  
+        # Highlight selected taxi with Star marker  
         if selected_taxi_id and selected_taxi_id in taxi_data_snapshot:
-            # Get smooth position for selected taxi too
             selected_lat, selected_lon = get_smooth_taxi_position(selected_taxi_id, current_time)
             if selected_lat is not None and selected_lon is not None:
                 selected_taxi = taxi_data_snapshot[selected_taxi_id]
@@ -777,7 +730,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
                     showlegend=False
                 ))
             
-            # Add route for selected taxi
+            # Route for selected taxi
             route = get_route(selected_taxi_id)
             if route:
                 route_lat = [p["latitude"] for p in route]
@@ -792,14 +745,13 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
                     showlegend=False
                 ))
     
-    # Add monitored area boundary circle
+    # Monitored area boundary circle 15 km (red) and warning radius circle 10km (orange)
     import numpy as np
     circle_lat = []
     circle_lon = []
     for i in range(101):
         angle = 2 * np.pi * i / 100
-        # Approximate circle in lat/lon (not perfect due to projection)
-        lat_offset = MONITORED_AREA['max_radius_km'] / 111.0  # Rough conversion
+        lat_offset = MONITORED_AREA['max_radius_km'] / 111.0  
         lon_offset = MONITORED_AREA['max_radius_km'] / (111.0 * np.cos(np.radians(MONITORED_AREA['center_lat'])))
         lat = MONITORED_AREA['center_lat'] + lat_offset * np.cos(angle)
         lon = MONITORED_AREA['center_lon'] + lon_offset * np.sin(angle)
@@ -815,7 +767,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         showlegend=False,
         hoverinfo='none'
     ))
-    # Add warning radius circle (10 km, orange)
+    
     warning_circle_lat = []
     warning_circle_lon = []
     for i in range(101):
@@ -838,7 +790,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
     ))
     
 
-    # Update map layout with optimized settings
+    # Update map layout 
     map_fig.update_layout(
         mapbox=dict(
             accesstoken=MAPBOX_ACCESS_TOKEN,
@@ -850,15 +802,14 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         showlegend=False,
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        dragmode='pan',  # Optimize for panning
-        hovermode='closest'  # Optimize hover detection
+        dragmode='pan',  
+        hovermode='closest'  
     )
     
-    # Optimized statistics calculation
+    # Statistics calculation
     total_active_taxis = len(taxi_data) if taxi_data else 0
     displayed_taxis = len(taxi_data_snapshot)
     
-    # Show both total and displayed count if limited
     if taxi_limit > 0 and total_active_taxis > taxi_limit:
         active_taxis_display = f"{displayed_taxis}/{total_active_taxis}"
     else:
@@ -868,15 +819,15 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
     area_violations = area_violations_today
     total_distance = total_distance_covered
     
-    # Calculate average speed more efficiently
+    # Calculate average speed
     if taxi_data_snapshot:
         total_speed = sum(data['speed'] for data in taxi_data_snapshot.values())
         avg_speed = total_speed / displayed_taxis
     else:
         avg_speed = 0
 
-    # Optimized speed distribution calculation
-    speed_bins = [0, 0, 0, 0, 0]  # Pre-allocate
+    # Speed distribution calculation
+    speed_bins = [0, 0, 0, 0, 0] 
     if taxi_data_snapshot:
         for data in taxi_data_snapshot.values():
             speed = data['speed']
@@ -905,15 +856,14 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
         paper_bgcolor='rgba(0,0,0,0)'
     )
     
-    # Optimized incident cards generation - Enhanced for different violation types
+    # Incident cards 
     incident_cards = []
-    recent_incidents = list(incident_log)[:10000]  # Only show last 10 incidents for performance
+    recent_incidents = list(incident_log)[:10000]  
     if incident_type and incident_type != "All":
         recent_incidents = [i for i in recent_incidents if i.get('type') == incident_type]
         
     if recent_incidents:
         for incident in recent_incidents:
-            # Different styling for different incident types
             if incident['type'] == 'Speed Violation':
                 icon_class = "fas fa-tachometer-alt"
                 icon_bg = "bg-danger"
@@ -924,9 +874,8 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
                 icon_bg = "bg-warning"
                 incident_text = f"Taxi {incident.get('taxi_id', '?')} exited monitored area"
                 location_text = f"Distance from center: {incident.get('distance_from_center', 0):.2f} km"
-            # In your update_dashboard callback, modify the incident card generation:
             elif incident['type'] == 'Warning Radius':
-                icon_class = "fas fa-exclamation-circle"  # Different icon for warning radius
+                icon_class = "fas fa-exclamation-circle"  
                 icon_bg = "bg-warning"
                 incident_text = f"Taxi {incident.get('taxi_id', '?')} entered warning zone (10-15km)"
                 location_text = f"Distance from center: {incident.get('distance_from_center',0):.2f} km"
@@ -940,13 +889,11 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
             card = dbc.Card(
                 dbc.CardBody([
                     html.Div([
-                        # Centered Icon
                         html.Div(
                             html.I(className=icon_class, style={"fontSize": "1.5rem"}),
                             className=f"{icon_bg} bg-opacity-10 rounded-circle d-flex align-items-center justify-content-center shadow-sm",
                             style={"width": "48px", "height": "48px", "margin": "0 auto"}
                         ),
-                        # Incident Details
                         html.Div([
                             html.Div([
                                 html.Strong(incident['type'],
@@ -968,7 +915,7 @@ def update_dashboard(n, zoom_in, zoom_out, reset_view, selected_taxi_id, show_tr
     
     # Performance logging
     processing_time = time.time() - start_time
-    if processing_time > 1.0:  # Log slow updates
+    if processing_time > 1.0: 
         print(f"Dashboard update took {processing_time:.2f}s for {displayed_taxis} displayed / {total_active_taxis} total taxis")
     
     return (
@@ -990,7 +937,6 @@ def interpolate_position(pos1, pos2, timestamp1, timestamp2, current_time):
     import datetime
     
     try:
-        # Parse timestamps
         if isinstance(timestamp1, str):
             t1 = datetime.datetime.strptime(timestamp1, '%H:%M:%S')
             t1 = t1.timestamp()
@@ -1014,15 +960,13 @@ def interpolate_position(pos1, pos2, timestamp1, timestamp2, current_time):
             factor = 0
         else:
             factor = (ct - t1) / (t2 - t1)
-            factor = max(0, min(1, factor))  # Clamp between 0 and 1
+            factor = max(0, min(1, factor))  
         
-        # Interpolate coordinates
         lat = pos1[0] + (pos2[0] - pos1[0]) * factor
         lon = pos1[1] + (pos2[1] - pos1[1]) * factor
         
         return lat, lon
     except:
-        # Fallback to current position if interpolation fails
         return pos2[0], pos2[1]
 
 def update_taxi_trajectory(taxi_id, lat, lon, timestamp):
@@ -1030,7 +974,6 @@ def update_taxi_trajectory(taxi_id, lat, lon, timestamp):
     if taxi_id not in taxi_trajectories:
         taxi_trajectories[taxi_id] = deque(maxlen=MAX_TRAJECTORY_LENGTH)
     
-    # Add new position with timestamp
     taxi_trajectories[taxi_id].append({
         'lat': lat,
         'lon': lon,
@@ -1044,25 +987,21 @@ def get_smooth_taxi_position(taxi_id, current_time=None):
     This creates the Uber-like smooth movement effect
     """
     if taxi_id not in taxi_trajectories or len(taxi_trajectories[taxi_id]) < 2:
-        # Not enough data for interpolation, return last known position
         if taxi_id in taxi_data:
             return taxi_data[taxi_id]['lat'], taxi_data[taxi_id]['lng']
         return None, None
     
     trajectory = list(taxi_trajectories[taxi_id])
-    
-    # Use the last two positions for interpolation
     pos1 = trajectory[-2]
     pos2 = trajectory[-1]
     
     if current_time is None:
         current_time = time.time()
     
-    # Convert to coordinates
+   
     coord1 = (pos1['lat'], pos1['lon'])
     coord2 = (pos2['lat'], pos2['lon'])
     
-    # Interpolate based on time
     lat, lon = interpolate_position(
         coord1, coord2, 
         pos1.get('time_added', current_time), 
