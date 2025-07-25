@@ -8,7 +8,7 @@ This system provides high-throughput, real-time monitoring for Beijing's taxi fl
 -----
 
 ## 🌐 Live Deployment
-You can access our real-time dashboard hosted on a public cloud instance: http://35.209.186.27:8050
+Once deployed, yow will find access to real-time dashboard hosted on a public cloud instance here
 
 -----
 
